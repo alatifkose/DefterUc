@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sys
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -14,6 +15,7 @@ CIKIS_BASARILI = 0
 CIKIS_HATALI = 1
 
 OLAY_ONAY_KARARI = "onay_karari"
+OLAY_ONAY_UYARISI = "onay_uyarisi"
 
 KOMUT_BEKLEYENLER = "bekleyenler"
 KOMUT_ONAYLA = "onayla"
@@ -58,7 +60,17 @@ def bekleyenleri_goster(ayarlar: Ayarlar) -> int:
 def onayla(ayarlar: Ayarlar, kimlik: int, *, gorulen_onizleme: str) -> int:
     try:
         with _veritabani(ayarlar) as veritabani:
-            kayit = onay.onayla(veritabani, kimlik, gorulen_onizleme=gorulen_onizleme)
+            try:
+                kayit = onay.onayla(
+                    veritabani, kimlik, gorulen_onizleme=gorulen_onizleme
+                )
+            except onay.KararSonrasiUyari as uyari:
+                kayit, metin = karar_sonrasi(veritabani, uyari)
+                if kayit is None or kayit.durum is not onay.Durum.UYGULANDI:
+                    _hata_yaz(metin)
+                    return CIKIS_HATALI
+                _yaz(metin)
+                return CIKIS_BASARILI
     except (onay.OnayHatasi, VeritabaniMesgul) as hata:
         _hata_yaz(str(hata))
         return CIKIS_HATALI
@@ -95,6 +107,33 @@ def karari_kaydet(kayit: onay.YapiIstegiKaydi) -> None:
     gunluk.olay_kaydet(
         OLAY_ONAY_KARARI,
         f"talep={kayit.kimlik} tur={kayit.tur} durum={kayit.durum.value}",
+    )
+
+
+def karar_sonrasi(
+    veritabani: Veritabani, uyari: onay.KararSonrasiUyari
+) -> tuple[onay.YapiIstegiKaydi | None, str]:
+    # Karar commit edildi ama temizlik düştü: durum tahmin edilmez, yeniden
+    # okunur; uyarı yalnız günlüğe gömülmez, sonuçla birlikte verilir.
+    sebep = type(uyari.__cause__ or uyari).__qualname__
+    gunluk.olay_kaydet(
+        OLAY_ONAY_UYARISI,
+        f"talep={uyari.kimlik} karar commit edildi, temizlik hatası: {sebep}",
+        logging.WARNING,
+    )
+    try:
+        kayit = onay.kayit_getir(veritabani, uyari.kimlik)
+    except Exception as hata:
+        gunluk.hata_kaydet(OLAY_ONAY_UYARISI, hata)
+        return None, (
+            f"Talep {uyari.kimlik}: işlemin sonucu doğrulanamadı, güncel durum "
+            f"okunamadı ({type(hata).__name__}). UYARI: {uyari.uyari}. "
+            "Durumu bekleyenler listesinden yeniden kontrol edin."
+        )
+    karari_kaydet(kayit)
+    return kayit, (
+        f"Talep {uyari.kimlik} onaylandı; durum {kayit.durum.value} ({kayit.tur}). "
+        f"UYARI: {uyari.uyari}."
     )
 
 

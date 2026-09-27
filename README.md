@@ -413,6 +413,28 @@ gösterilir, pencere kapanmaz. Onay tek tıktır; ikinci bir "emin misiniz" soru
 önce çalışan sürüm; istenirse eklenir). Yapı isteği bırakma pencerede
 yoktur, o Cowork'un işidir.
 
+**Hata sınırı** (dış inceleme 14061d3 B3). Düğmeler yalnız bilinen iki hata
+türünü yakalıyordu; başka bir veritabanı hatası Qt'nin `sys.excepthook`
+yoluna kaçıyor, ne mesaj ne günlük bırakıyordu; talep bekliyor görünmeye
+devam ediyordu. Şimdi onayla ve reddet tek sınırdan geçer (`_sinirla`):
+bilinen hatalar mesaj olur, beklenmeyen hata `pencere_hatasi` olayıyla
+türü günlüğe yazılır ve ekranda gösterilir; ardından liste **bir kez**
+yenilenir. Yenileme (`yenile`) kendi hatasını da yakalar (`pencere_hatasi`,
+"Liste yenilenemedi"), `False` döner ve tekrar yenileme çağırmaz (hata
+döngüsü yok); sınır bu durumda mesaja "işlemin sonucu doğrulanamadı" ekler,
+gerçekleşti ya da geri alındı diye tahmin etmez. **Commit sonrası temizlik
+hatası** ayrı ele alınır: yeniden kurma commit olduktan sonra yabancı anahtar
+denetimi bağlantıda yeniden açılamazsa (`DenetimGeriAcilamadi`) `onay.onayla`
+bunu `KararSonrasiUyari(kimlik, uyari)` olarak yükseltir (bayat önizlemede
+karar yazılmadığı için orada yine `OnizlemeDegisti`). Komut satırı ve pencere
+`komutlar.karar_sonrasi` ile talebi yeniden okur, `onay_uyarisi` olayını
+günlüğe yazar ve sonucu uyarıyla birlikte verir: "Talep N onaylandı; durum
+UYGULANDI (...). UYARI: ..."; durum okunamazsa "işlemin sonucu doğrulanamadı"
+der ve komut satırı hatalı çıkar. Uyarı yalnız günlüğe gömülmez. Testli:
+onay katmanı (denetim yeniden açılamıyor, iki senaryo), komut satırı (uyarılı
+başarı, okunamayan durum), pencere (beklenmeyen hata, commit sonrası uyarı,
+yenileme hatası döngüsüz).
+
 Testler (`tests/test_pencere.py`) Qt'nin ekransız (`offscreen`) platformuyla
 gerçek pencere kurar, düğmelere `click()` ile basar ve listeleri, SQL
 kutusunu, mesajı, veritabanını ve günlüğü doğrular; olay döngüsü

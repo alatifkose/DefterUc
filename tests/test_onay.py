@@ -773,3 +773,49 @@ def test_paket_paket_iceremez() -> None:
     metin = '{"isler": [{"tur": "yapi_paketi", "istek": ' + ic + "}]}"
     with pytest.raises(ValueError):
         onay.istek_coz("yapi_paketi", metin)
+
+
+# --- inceleme 14061d3 B3: commit sonrası temizlik hatası gerçek durumla bildirilir --
+
+
+def _denetim_geri_acilmasin(monkeypatch: pytest.MonkeyPatch) -> None:
+    gercek = vt._pragmalari_transaction_disinda_uygula  # pyright: ignore[reportPrivateUsage]
+
+    def sahte(ham: object, pragmalar: tuple[tuple[str, str], ...]) -> None:
+        if pragmalar == (("foreign_keys", "ON"),):
+            raise RuntimeError("kasıtlı: denetim yeniden açılamadı")
+        gercek(ham, pragmalar)  # pyright: ignore[reportArgumentType]
+
+    monkeypatch.setattr(vt, "_pragmalari_transaction_disinda_uygula", sahte)
+
+
+def test_commit_sonrasi_denetim_acilamazsa_karar_sonrasi_uyari_verir_durum_uygulandi(
+    veritabani: vt.Veritabani, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _gorup_onayla(veritabani, onay.istek_birak(veritabani, KISILER))
+    kimlik = onay.istek_birak(veritabani, KISILER_YENI)
+    gorulen = onay.kayit_getir(veritabani, kimlik)
+    _denetim_geri_acilmasin(monkeypatch)
+    with pytest.raises(onay.KararSonrasiUyari) as bilgi:
+        onay.onayla(veritabani, kimlik, gorulen_onizleme=onay.onizleme_kodu(gorulen))
+    monkeypatch.undo()
+    assert bilgi.value.kimlik == kimlik
+    assert "commit edildi" in str(bilgi.value)
+    assert "yeniden açılamadı" in bilgi.value.uyari
+    kayit = onay.kayit_getir(veritabani, kimlik)
+    assert kayit.durum is onay.Durum.UYGULANDI and kayit.sonuc is None
+    with veritabani.islem() as oturum:
+        oturum.execute(text("INSERT INTO kisiler (id) VALUES (5)"))
+        assert oturum.execute(text("PRAGMA foreign_keys")).scalar_one() == 1
+
+
+def test_bayat_onizlemede_denetim_hatasi_karar_yazmaz_onizleme_hatasi_verir(
+    veritabani: vt.Veritabani, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _gorup_onayla(veritabani, onay.istek_birak(veritabani, KISILER))
+    kimlik = onay.istek_birak(veritabani, KISILER_YENI)
+    _denetim_geri_acilmasin(monkeypatch)
+    with pytest.raises(onay.OnizlemeDegisti):
+        onay.onayla(veritabani, kimlik, gorulen_onizleme="bayat")
+    monkeypatch.undo()
+    assert onay.kayit_getir(veritabani, kimlik).durum is onay.Durum.BEKLIYOR

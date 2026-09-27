@@ -390,3 +390,88 @@ def test_paket_pencerede_tek_istek_olarak_gorunur_ve_tek_tikla_uygulanir(
             ).all()
         }
     assert {"bankalar", "kartlar"} <= adlar
+
+
+# --- inceleme 14061d3 B3: pencerede hiçbir hata sessiz kalmaz ------------------------
+
+
+def test_beklenmeyen_hata_pencerede_gorunur_gunluge_yazilir_liste_yenilenir(
+    pencere_: pencere.OnayPenceresi,
+    veritabani: vt.Veritabani,
+    ayar: ay.Ayarlar,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sqlite3
+
+    onay.istek_birak(veritabani, KISILER)
+    pencere_.yenile()
+
+    def patlat(*_: object, **__: object) -> onay.YapiIstegiKaydi:
+        raise sqlite3.OperationalError("attempt to write a readonly database")
+
+    monkeypatch.setattr(onay, "onayla", patlat)
+    pencere_.onayla_dugmesi.click()
+    mesaj = pencere_.mesaj.text()
+    assert "Beklenmeyen hata" in mesaj and "OperationalError" in mesaj
+    assert (
+        f"| {pencere.OLAY_PENCERE_HATASI} | hata türü: sqlite3.OperationalError"
+        in _log(ayar)
+    )
+    assert _liste(pencere_.bekleyenler)[0].startswith("[1] tablo_olusturma")
+    assert "kisiler" not in _tablolar(veritabani)
+
+
+def test_commit_sonrasi_temizlik_hatasi_gercek_durum_ve_uyariyla_gosterilir(
+    pencere_: pencere.OnayPenceresi,
+    veritabani: vt.Veritabani,
+    ayar: ay.Ayarlar,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    onay.istek_birak(veritabani, KISILER)
+    pencere_.yenile()
+    gercek = onay.onayla
+
+    def sar(v: vt.Veritabani, k: int, *, gorulen_onizleme: str) -> onay.YapiIstegiKaydi:
+        gercek(v, k, gorulen_onizleme=gorulen_onizleme)
+        raise onay.KararSonrasiUyari(k, "yabancı anahtar denetimi yeniden açılamadı")
+
+    monkeypatch.setattr(onay, "onayla", sar)
+    pencere_.onayla_dugmesi.click()
+    mesaj = pencere_.mesaj.text()
+    assert "Talep 1 onaylandı; durum UYGULANDI" in mesaj
+    assert "UYARI" in mesaj and "yeniden açılamadı" in mesaj
+    assert "kisiler" in _tablolar(veritabani)
+    assert _liste(pencere_.bekleyenler) == []
+    assert _liste(pencere_.kararlar)[0].startswith("[1] tablo_olusturma · UYGULANDI")
+    log = _log(ayar)
+    assert f"| {komutlar.OLAY_ONAY_KARARI} | talep=1" in log
+    assert f"| {komutlar.OLAY_ONAY_UYARISI} | talep=1" in log
+
+
+def test_yenileme_hatasi_dongu_yapmaz_ve_sonucun_dogrulanamadigini_soyler(
+    pencere_: pencere.OnayPenceresi,
+    veritabani: vt.Veritabani,
+    ayar: ay.Ayarlar,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    onay.istek_birak(veritabani, KISILER)
+    pencere_.yenile()
+    sayac = {"n": 0}
+
+    def bozuk(_v: vt.Veritabani) -> tuple[onay.YapiIstegiKaydi, ...]:
+        sayac["n"] += 1
+        raise RuntimeError("kasıtlı: liste okunamadı")
+
+    monkeypatch.setattr(onay, "bekleyenler", bozuk)
+    pencere_.yenile_dugmesi.click()
+    assert "yenilenemedi" in pencere_.mesaj.text()
+    assert sayac["n"] == 1
+    pencere_.onayla_dugmesi.click()
+    assert "kisiler" in _tablolar(veritabani)
+    mesaj = pencere_.mesaj.text()
+    assert "onaylandı ve uygulandı" in mesaj and "doğrulanamadı" in mesaj
+    assert sayac["n"] == 2
+    assert (
+        f"| {pencere.OLAY_PENCERE_HATASI} | hata türü: builtins.RuntimeError"
+        in _log(ayar)
+    )

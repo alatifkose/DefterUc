@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import Connection
 
 from defteruc.cekirdek import motor as m
-from defteruc.cekirdek.veritabani import Veritabani
+from defteruc.cekirdek.veritabani import DenetimGeriAcilamadi, Veritabani
 
 SISTEM_TABLOSU = "_defteruc_yapi_istekleri"
 PAKET_TURU = "yapi_paketi"
@@ -33,6 +33,16 @@ class ZatenKararVerilmis(OnayHatasi): ...
 
 
 class OnizlemeDegisti(OnayHatasi): ...
+
+
+class KararSonrasiUyari(OnayHatasi):
+    def __init__(self, kimlik: int, uyari: str) -> None:
+        super().__init__(
+            f"talep {kimlik}: karar ve iş commit edildi, ancak {uyari}; "
+            "güncel durum yeniden okunmalı"
+        )
+        self.kimlik = kimlik
+        self.uyari = uyari
 
 
 ISTEK_TURLERI: dict[str, type[m.YapiIstegi]] = {
@@ -204,6 +214,12 @@ def onayla(
             raise onizleme_hatasi from hata
         with veritabani.islem() as oturum:
             _karari_yaz(oturum.connection(), kimlik, Durum.UYGULANAMADI, str(hata))
+    except DenetimGeriAcilamadi as hata:
+        # Karar ve DDL commit edildi; yalnız bağlantı temizliği düştü. Başarı
+        # gibi dönmez: çağıran durumu yeniden okur ve uyarıyı gösterir.
+        if degisti:
+            raise onizleme_hatasi from hata
+        raise KararSonrasiUyari(kimlik, str(hata)) from hata
     if degisti:
         raise onizleme_hatasi
     return kayit_getir(veritabani, kimlik)

@@ -336,3 +336,57 @@ def test_paket_bekleyenlerde_sirasiyla_gosterilir_ve_tek_onayla_uygulanir(
     assert baslangic.main(_goster_ve_komutu_al(kimlik, capsys)) == 0
     assert "onaylandı ve uygulandı (yapi_paketi)" in capsys.readouterr().out
     assert {"bankalar", "kartlar"} <= _tablolar(ayar)
+
+
+# --- inceleme 14061d3 B3: komut satırı commit sonrası uyarıyı ve gerçek durumu yazar -
+
+
+def test_onayla_commit_sonrasi_uyariyi_gercek_durumla_yazar(
+    ayar: ay.Ayarlar,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kimlik = _birak(ayar, KISILER)
+    komut = _goster_ve_komutu_al(kimlik, capsys)
+    gercek = onay.onayla
+
+    def sar(v: vt.Veritabani, k: int, *, gorulen_onizleme: str) -> onay.YapiIstegiKaydi:
+        gercek(v, k, gorulen_onizleme=gorulen_onizleme)
+        raise onay.KararSonrasiUyari(k, "yabancı anahtar denetimi yeniden açılamadı")
+
+    monkeypatch.setattr(onay, "onayla", sar)
+    assert baslangic.main(komut) == 0
+    cikti = capsys.readouterr()
+    assert "Talep 1 onaylandı; durum UYGULANDI (tablo_olusturma)." in cikti.out
+    assert "UYARI" in cikti.out and "yeniden açılamadı" in cikti.out
+    assert "kisiler" in _tablolar(ayar)
+    satirlar = _log_satirlari(ayar)
+    assert any(f"| {komutlar.OLAY_ONAY_KARARI} | talep=1" in s for s in satirlar)
+    assert any(f"| {komutlar.OLAY_ONAY_UYARISI} | talep=1" in s for s in satirlar)
+
+
+def test_onayla_commit_sonrasi_durum_okunamazsa_dogrulanamadi_der(
+    ayar: ay.Ayarlar,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kimlik = _birak(ayar, KISILER)
+    komut = _goster_ve_komutu_al(kimlik, capsys)
+
+    def uyar(
+        v: vt.Veritabani, k: int, *, gorulen_onizleme: str
+    ) -> onay.YapiIstegiKaydi:
+        raise onay.KararSonrasiUyari(k, "temizlik düştü")
+
+    def okunamaz(v: vt.Veritabani, k: int) -> onay.YapiIstegiKaydi:
+        raise RuntimeError("kasıtlı: okunamadı")
+
+    monkeypatch.setattr(onay, "onayla", uyar)
+    monkeypatch.setattr(onay, "kayit_getir", okunamaz)
+    assert baslangic.main(komut) == 1
+    cikti = capsys.readouterr()
+    assert "işlemin sonucu doğrulanamadı" in cikti.err
+    assert "uygulandı" not in cikti.err and "geri alındı" not in cikti.err
+    assert any(
+        f"| {komutlar.OLAY_ONAY_UYARISI} | talep=1" in s for s in _log_satirlari(ayar)
+    )
