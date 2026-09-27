@@ -912,3 +912,169 @@ def test_bekleyen_paket_semayla_gecersizlesirse_listelenir_ve_onay_uygulanamadi_
     assert kayit.durum is onay.Durum.UYGULANAMADI
     assert "zaten var" in (kayit.sonuc or "")
     assert _sutun_turleri(veritabani, "kisiler")["puan"] == "REAL"
+
+
+# --- plan commit 5: önizleme, kayıt ve uygulama bütünlüğü -------------------------
+
+
+def _kisiler_hazir(v: vt.Veritabani) -> None:
+    _gorup_onayla(v, onay.istek_birak(v, KISILER))
+    with v.islem() as oturum:
+        oturum.execute(text("INSERT INTO kisiler (ad_soyad) VALUES ('A')"))
+
+
+PUAN_HESAPLI = m.SutunEklemeIstegi(
+    "kisiler", m.Sutun("puan", ("INTEGER", "AS (id * 2)"))
+)
+KISA_AD = m.SutunEklemeIstegi("kisiler", m.Sutun("kisa_ad", ("TEXT",)))
+YK_KISA = m.SutunOzelligiDegistirmeIstegi(
+    "kisiler",
+    (
+        m.Sutun("id", ("INTEGER", "PRIMARY KEY")),
+        m.Sutun("ad_soyad", ("TEXT", "NOT NULL", "DEFAULT ''")),
+        m.Sutun("kisa_ad", ("TEXT", "DEFAULT ''")),
+    ),
+)
+IX_PUAN = m.IndeksOlusturmaIstegi("ix_kisiler_puan", "kisiler", ("puan",))
+
+
+def _iki_okuma_ayni(v: vt.Veritabani, kimlik: int) -> str:
+    ilk = onay.kayit_getir(v, kimlik).sql
+    assert onay.bekleyenler(v)[0].sql == ilk
+    assert onay.bekleyenler(v)[0].sql == ilk
+    return ilk
+
+
+def test_yeniden_kur_sonra_ekle_paketinde_onizleme_calisanla_ayni(
+    veritabani: vt.Veritabani,
+) -> None:
+    _kisiler_hazir(veritabani)
+    kimlik = onay.istek_birak(veritabani, m.YapiPaketi((PUAN_HESAPLI, KISILER_YENI)))
+    sql = _iki_okuma_ayni(veritabani, kimlik)
+    assert sql.index("INSERT OR ABORT") < sql.index("ADD COLUMN")
+    _onizleme_calisanla_ayni(veritabani, kimlik)
+    with veritabani.islem() as oturum:
+        assert oturum.execute(text("SELECT puan FROM kisiler")).scalar_one() == 2
+
+
+def test_karisik_paket_ekle_yeniden_kur_ekle_indeks_onizleme_ozet_ve_calisan_ayni(
+    veritabani: vt.Veritabani,
+) -> None:
+    _kisiler_hazir(veritabani)
+    paket = m.YapiPaketi((IX_PUAN, PUAN_HESAPLI, YK_KISA, KISA_AD))
+    kimlik = onay.istek_birak(veritabani, paket)
+    kayit = onay.kayit_getir(veritabani, kimlik)
+    ozet = onay.istek_ozeti(kayit)
+    assert (
+        "1) sutun_ekleme kisiler.kisa_ad 2) sutun_ozelligi_degistirme kisiler "
+        "3) sutun_ekleme kisiler.puan 4) indeks_olusturma ix_kisiler_puan"
+    ) in ozet
+    sql = _iki_okuma_ayni(veritabani, kimlik)
+    konumlar = [
+        sql.index('ADD COLUMN "kisa_ad"'),
+        sql.index("INSERT OR ABORT"),
+        sql.index('ADD COLUMN "puan"'),
+        sql.index("CREATE INDEX"),
+    ]
+    assert konumlar == sorted(konumlar)
+    gorulen = sql
+    kayit, calisanlar = _calisanlari_yakala(veritabani, kimlik)
+    assert kayit.durum is onay.Durum.UYGULANDI, kayit.sonuc
+    assert kayit.sql == gorulen
+    for cumle in gorulen.split(";\n"):
+        assert cumle in calisanlar, cumle[:100]
+    # Onay yolunda önizleme yeniden üretilirken üyeler SAVEPOINT içinde de çalışır;
+    # gerçek koşu en sondadır, bu yüzden son görülme sırası karşılaştırılır.
+    son_konum = [
+        max(i for i, c in enumerate(calisanlar) if c == cumle)
+        for cumle in gorulen.split(";\n")
+    ]
+    assert son_konum == sorted(son_konum)
+    with veritabani.islem() as oturum:  # table_info hesaplanan sütunu gizler
+        adlar = [
+            str(s[1]) for s in oturum.execute(text('PRAGMA table_xinfo("kisiler")'))
+        ]
+    assert adlar == ["id", "ad_soyad", "kisa_ad", "puan"]
+    assert "ix_kisiler_puan" in _indeksler(veritabani)
+
+
+def test_iki_yeniden_kurma_ayni_tabloda_onizleme_calisanla_ayni(
+    veritabani: vt.Veritabani,
+) -> None:
+    _kisiler_hazir(veritabani)
+    yk2 = m.SutunOzelligiDegistirmeIstegi(
+        "kisiler",
+        (
+            m.Sutun("id", ("INTEGER", "PRIMARY KEY")),
+            m.Sutun("ad_soyad", ("TEXT", "NOT NULL", "DEFAULT 'x'")),
+        ),
+    )
+    kimlik = onay.istek_birak(veritabani, m.YapiPaketi((KISILER_YENI, yk2)))
+    sql = _iki_okuma_ayni(veritabani, kimlik)
+    assert sql.count("INSERT OR ABORT") == 2
+    _onizleme_calisanla_ayni(veritabani, kimlik)
+    with veritabani.islem() as oturum:
+        varsayilan = oturum.execute(text('PRAGMA table_info("kisiler")')).all()[1][4]
+    assert varsayilan == "'x'"
+
+
+def test_yeniden_kurmasiz_sirasi_bagimli_paket_onizleme_calisanla_ayni(
+    veritabani: vt.Veritabani,
+) -> None:
+    _kisiler_hazir(veritabani)
+    d = m.SutunEklemeIstegi("kisiler", m.Sutun("d", ("INTEGER", "CHECK (d > base)")))
+    base = m.SutunEklemeIstegi("kisiler", m.Sutun("base", ("INTEGER",)))
+    kimlik = onay.istek_birak(veritabani, m.YapiPaketi((d, base)))
+    sql = _iki_okuma_ayni(veritabani, kimlik)
+    assert sql.index('"base"') < sql.index('"d"')
+    _onizleme_calisanla_ayni(veritabani, kimlik)
+
+
+def test_arada_sema_degisirse_paket_onizlemesi_yenilenir_ve_eski_kodla_onay_durur(
+    veritabani: vt.Veritabani,
+) -> None:
+    _kisiler_hazir(veritabani)
+    kimlik = onay.istek_birak(veritabani, m.YapiPaketi((KISILER_YENI, PUAN_HESAPLI)))
+    eski = onay.kayit_getir(veritabani, kimlik)
+    eski_kod = onay.onizleme_kodu(eski)
+    # Bu arada tabloya başka yoldan sütun eklendi: yeniden kurma tanımı artık eşleşmez.
+    _gorup_onayla(veritabani, onay.istek_birak(veritabani, KISA_AD))
+    (yeni,) = onay.bekleyenler(veritabani)
+    assert yeni.sql != eski.sql and m.UYGULANAMAZ_ONEKI in yeni.sql
+    with pytest.raises(onay.OnizlemeDegisti):
+        onay.onayla(veritabani, kimlik, gorulen_onizleme=eski_kod)
+    assert onay.kayit_getir(veritabani, kimlik).durum is onay.Durum.BEKLIYOR
+    kayit = onay.onayla(veritabani, kimlik, gorulen_onizleme=onay.onizleme_kodu(yeni))
+    assert kayit.durum is onay.Durum.UYGULANAMADI
+    assert "yeniden kurma" in (kayit.sonuc or "")
+    assert "puan" not in _sutun_turleri(veritabani, "kisiler")
+
+
+@pytest.mark.parametrize("asama", [1, 2, 3, 4])
+def test_her_asamada_zorlanmis_hata_hicbir_sey_birakmaz(
+    veritabani: vt.Veritabani, monkeypatch: pytest.MonkeyPatch, asama: int
+) -> None:
+    paket = m.YapiPaketi((IX_PUAN, PUAN_HESAPLI, YK_KISA, KISA_AD, KISILER))
+    kimlik = onay.istek_birak(veritabani, paket)
+    gercek = m.uygula_baglantida
+    durum = {"gercek_kosu": False, "n": 0}
+
+    def sar(baglanti: object, istek: m.YapiIstegi) -> None:
+        # Önizleme üyeleri tek tek çalıştırır; gerçek koşu paketle başlar. Yalnız
+        # gerçek koşudaki n. üye düşürülür.
+        if isinstance(istek, m.YapiPaketi):
+            durum["gercek_kosu"] = True
+        elif durum["gercek_kosu"]:
+            durum["n"] += 1
+            if durum["n"] == asama:
+                raise m.MotorHatasi(f"kasıtlı: {asama}. aşama düştü")
+        gercek(baglanti, istek)  # pyright: ignore[reportArgumentType]
+
+    monkeypatch.setattr(m, "uygula_baglantida", sar)
+    kayit = _gorup_onayla(veritabani, kimlik)
+    assert kayit.durum is onay.Durum.UYGULANAMADI
+    assert f"{asama}. aşama" in (kayit.sonuc or "")
+    assert "kisiler" not in _tablolar(veritabani)
+    assert "ix_kisiler_puan" not in _indeksler(veritabani)
+    with veritabani.islem() as oturum:
+        assert oturum.execute(text("PRAGMA foreign_keys")).scalar_one() == 1

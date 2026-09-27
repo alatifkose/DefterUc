@@ -446,11 +446,30 @@ kurma önizlemesi böylece gerçek kopya cümleleriyle çıkar. Yeniden kurma
 üyesi önizlemede uygulanmaz: yabancı anahtar denetimi açıkken ebeveyn
 tablonun `DROP`'u düşer (betikle doğrulandı), denetim kapalıyken düşmez;
 uygulansaydı bekleyenlerde (denetim açık) ve onayda (denetim kapalı) farklı
-metin çıkar, onay hiç verilemezdi. Bekleyenler her okunduğunda önizleme
-yeniden üretilir (`yeniden_kurma_gerekir(paket)` = üyelerden biri
-gerektiriyorsa) ve onayda görülen kodla karşılaştırılır; tekil istekle aynı
-kural. Test, paket önizlemesinin bekleyenlerde iki okumada ve onayda aynı
-kaldığını ve her cümlenin birebir çalıştığını doğrular.
+metin çıkar, onay hiç verilemezdi. Bekleyenler her okunduğunda paketin
+önizlemesi yeniden üretilir (her paket için; tekil istekte yalnız yeniden
+kurma gerektiriyorsa) ve onayda görülen kodla karşılaştırılır. Test, paket
+önizlemesinin bekleyenlerde iki okumada ve onayda aynı kaldığını ve her
+cümlenin birebir çalıştığını doğrular.
+
+**Bütünlük denetimi** (plan commit 5, testle sınandı; kod değişikliği
+gerekmedi): SQL üretimi, paket özeti ve uygulama aynı `paketi_sirala`
+planını kullanır, sıra şemaya bakmadığı için çağrı yolları farklı sıra
+seçemez. Yeni sıralar (yeniden kur → ekle; ekle → yeniden kur → ekle → indeks;
+aynı tabloda iki yeniden kurma; yeniden kurmasız ama sırası önkoşula bağlı
+paket) için gösterilen metin çalıştırılan cümlelerle birebir aynı çıktı ve
+özetteki sıra, SQL'deki sıra ve fiilen çalıştırılan sıra tutarlı bulundu.
+Yeniden kurmanın önizlemede uygulanmaması yeni sıralarda da yeterli: sütun
+ekleme metni şemaya bağlı değildir, yeniden kurma kopya cümleleri yeni
+tanımdan ve mevcut sütun adlarından üretilir, ikisi de önceki yeniden
+kurmayla değişmez. Arada şema değişirse (`bekleyen paket + dışarıdan sütun
+ekleme`) bekleyenler önizlemeyi yeniden hesaplar ve `-- UYGULANAMAZ`
+işaretler; eski kodla onay `OnizlemeDegisti` ile durur, yeni kodla onay
+`UYGULANAMADI` olur, otomatik yeni kodla onay verilmez. Beş üyeli pakette her
+aşamada zorlanan hata (gerçek koşuda n. üye düşürülür) hiçbir tablo ya da
+indeks bırakmaz ve yabancı anahtar denetimi geri açılır. Onay yolunda
+önizleme yeniden üretilirken üyeler SAVEPOINT içinde de çalıştığı için
+"çalışan cümle" karşılaştırması son görülme sırasına bakar.
 
 **Kayıt ve arayüz.** Sistem tablosunda `tur = 'yapi_paketi'`, `istek`
 sütununda üyeler kendi türleriyle (`{"isler": [{"tur": ..., "istek":
