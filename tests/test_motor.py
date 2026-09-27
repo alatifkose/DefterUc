@@ -2232,3 +2232,83 @@ def test_paket_duserse_silinen_indeks_geri_gelir(veritabani: vt.Veritabani) -> N
         (1, "01"),
         (2, "1"),
     ]
+
+
+# --- inceleme 14061d3 S1: hesaplanan sütun, dayandığı sütundan sonra eklenir ---------
+
+T_ID = m.TabloOlusturmaIstegi("t", (m.Sutun("id", ("INTEGER", "PRIMARY KEY")),))
+
+
+def _ekle(ad: str, *ozellikler: str) -> m.SutunEklemeIstegi:
+    return m.SutunEklemeIstegi("t", m.Sutun(ad, ozellikler))
+
+
+BASE = _ekle("base", "INTEGER")
+DERIVED = _ekle("derived", "INTEGER", "GENERATED ALWAYS AS (base * 2) VIRTUAL")
+ZINCIR_UCU = _ekle("ucuncu", "INTEGER", "AS (derived + base)")
+
+
+def test_hesaplanan_sutun_dayandigi_sutundan_sonra_gelir_iki_giris_sirasinda() -> None:
+    assert _sira(DERIVED, BASE) == (BASE, DERIVED)
+    assert _sira(BASE, DERIVED) == (BASE, DERIVED)
+    assert _sira(ZINCIR_UCU, DERIVED, BASE) == (BASE, DERIVED, ZINCIR_UCU)
+    assert _sira(DERIVED, ZINCIR_UCU, BASE) == (BASE, DERIVED, ZINCIR_UCU)
+
+
+@pytest.mark.parametrize(
+    "ifade",
+    [
+        '("base" * 2)',
+        "([base] * 2)",
+        "(`base` * 2)",
+        "(round((base + 1) * 2, 0))",
+        "(CASE WHEN base > 0 THEN base ELSE -base END)",
+        "(coalesce(base, 0))",
+    ],
+)
+def test_tirnakli_ic_ice_parantezli_ve_islevli_ifadede_bagimlilik_bulunur(
+    ifade: str,
+) -> None:
+    turetilen = _ekle("d", "INTEGER", f"GENERATED ALWAYS AS {ifade} VIRTUAL")
+    assert _sira(turetilen, BASE) == (BASE, turetilen)
+
+
+def test_metin_sabiti_islev_adi_ve_baska_tablo_bagimlilik_sayilmaz() -> None:
+    metin = _ekle("d", "TEXT", "GENERATED ALWAYS AS ('base' || 'x') VIRTUAL")
+    assert _sira(metin, BASE) == (metin, BASE)
+    islev_adli = _ekle("upper", "TEXT")
+    kullanan = _ekle("e", "TEXT", "GENERATED ALWAYS AS (upper(id)) VIRTUAL")
+    assert _sira(kullanan, islev_adli) == (kullanan, islev_adli)
+    baska_tablo = m.SutunEklemeIstegi("u", m.Sutun("base", ("INTEGER",)))
+    assert _sira(DERIVED, baska_tablo) == (DERIVED, baska_tablo)
+    referans = _ekle("p_id", "INTEGER", "REFERENCES base(id)")
+    assert _sira(referans, BASE) == (referans, BASE)
+
+
+def test_hesaplanan_sutunlar_dongu_olusturursa_paket_acikca_reddedilir() -> None:
+    a = _ekle("a", "INTEGER", "GENERATED ALWAYS AS (b * 2) VIRTUAL")
+    b = _ekle("b", "INTEGER", "GENERATED ALWAYS AS (a * 2) VIRTUAL")
+    with pytest.raises(m.GecersizPaket, match="döngü"):
+        _sira(a, b)
+    c = _ekle("c", "INTEGER", "AS (a + 1)")
+    a2 = _ekle("a", "INTEGER", "AS (c + 1)")
+    with pytest.raises(m.GecersizPaket, match="döngü"):
+        _sira(c, a2, BASE)
+
+
+@pytest.mark.parametrize(
+    "isler", [(BASE, DERIVED), (DERIVED, BASE)], ids=["base,derived", "derived,base"]
+)
+def test_hesaplanan_sutun_paketi_iki_sirada_da_uygulanir(
+    veritabani: vt.Veritabani, isler: tuple[m.YapiIsi, ...]
+) -> None:
+    _uygula(veritabani, T_ID)
+    with veritabani.islem() as oturum:
+        oturum.execute(text("INSERT INTO t (id) VALUES (1)"))
+    _uygula(veritabani, m.YapiPaketi(isler))
+    with veritabani.islem() as oturum:
+        # table_info hesaplanan (gizli) sütunu listelemez; table_xinfo listeler.
+        adlar = [str(s[1]) for s in oturum.execute(text('PRAGMA table_xinfo("t")'))]
+        assert adlar == ["id", "base", "derived"]
+        oturum.execute(text("UPDATE t SET base = 21 WHERE id = 1"))
+        assert oturum.execute(text("SELECT derived FROM t")).scalar_one() == 42

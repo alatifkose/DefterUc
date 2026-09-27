@@ -326,6 +326,25 @@ için zararsızdır (yeniden kurma o indeksi artık geri kurmaz) ve şemaya
 bakmadan önizleme ile uygulama aynı sırayı üretir; silmeye giden başka
 öncelik oku olmadığı için döngü doğmaz. Testli: aynı iki iş iki giriş
 sırasında aynı sonucu verir; paket düşerse silinen indeks de geri gelir.
+**Aynı tabloda hesaplanan sütun** (dış inceleme 14061d3 S1): iki sütun
+ekleme aynı tabloya gidiyorsa ve birinin tanımı hesaplanan sütunsa
+(`GENERATED ALWAYS AS (ifade)` ya da kısa `AS (ifade)`), ifadede adı geçen
+sütunun eklemesi önce gelir. Bağımlılık yalnız o parantezin içinden okunur
+(`hesaplama_ifadesi`, `hesaplamada_kullanilan_sutunlar`): metin sabitleri
+boşaltılır, tırnaklı adlar (`"base"`, `` `base` ``, `[base]`) olduğu gibi,
+çıplak adlar `(` ile sürmüyorsa (işlev adı değilse) alınır, iç içe parantez
+dengeyle izlenir; başka tablonun adı, `REFERENCES` hedefi ya da başka bir
+SQL öğesi bağımlılık sayılmaz (denetimcinin uyarısı: geniş kelime taraması
+yanlış bağımlılık üretirdi). Zincir sıralayıcıdan gelir (`ucuncu` →
+`derived` → `base`). Hesaplanan sütunlar birbirine dayanıyorsa
+(`a AS (b*2)`, `b AS (a*2)`) sıra yoktur; paket `GecersizPaket` ile
+"döngü" diyerek reddedilir, verilen sıra korunarak sessizce geçilmez.
+Eskiden `(derived, base)` sırası "no such column: base" ile düşüyor,
+ters sıra geçiyordu; sıra Cowork'e kalıyordu. Testli: iki giriş sırası,
+zincir, tırnaklı ad, iç içe parantez, CASE ve işlev, metin sabiti ve işlev
+adından yanlış bağımlılık çıkmaması, gerçek döngünün reddi, gerçek
+veritabanında iki sırada uygulama.
+
 Başvuru bir ayrıştırma değil taramadır: tek tırnaklı metin sabitleri
 çıkarıldıktan sonra `REFERENCES <ad>` (çıplak, `"..."`, `` `...` `` ya da
 `[...]`) aranır; başka bir şey okunmaz. Bunun dışında verilen sıra korunur:
@@ -1293,7 +1312,7 @@ src/defteruc/    uygulama paketi
     veritabani.py   SQLite bağlantı politikası, işlem sınırı
     motor.py        yapı işleri: tablo, sütun, sütun özelliği, indeks, yapı paketi (sıra); ham SQL
     onay.py         yapı istekleri: sistem tablosu, bekleyenler, onay ve ret
-    yapi.py         mevcut yapıyı okuma (tablolar, sütunlar, indeksler, satır sayısı)
+    yapi.py         mevcut yapıyı okuma (tablolar, sütunlar, indeksler, satır sayısı); sistem tablosu sınırı, yetki kancası, güncelleme zinciri
     kayit.py        satır ekleme (kayıt) ve koşullu güncelleme: onaysız, tek transaction, anahtar döner
     okuma.py        satır okuma: koşul, sayfalama, yetkilendirme kancasıyla yalnız okuma
     arsiv.py        gelen dizini sınırı, akışla SHA-256, içerik adresli atomik arşiv, bütünlük

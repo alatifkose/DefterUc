@@ -378,6 +378,46 @@ _BASVURU = re.compile(
     r"\bREFERENCES\s+(?:\"([^\"]+)\"|`([^`]+)`|\[([^\]]+)\]|([A-Za-z_][A-Za-z0-9_]*))",
     re.IGNORECASE,
 )
+_HESAPLAMA_BASI = re.compile(r"\bAS\s*\(", re.IGNORECASE)
+_TANIMLAYICI = re.compile(
+    r"\"([^\"]+)\"|`([^`]+)`|\[([^\]]+)\]|([A-Za-z_][A-Za-z0-9_]*)(\s*\()?"
+)
+
+
+def hesaplama_ifadesi(sutun: Sutun) -> str | None:
+    # Hesaplanan sütunun "AS ( ... )" parantezinin içi; metin sabitleri
+    # boşaltılmış. GENERATED ALWAYS AS (...) ve kısa AS (...) aynı biçimdir.
+    metin = _METIN_SABITI.sub("''", " ".join(sutun.ozellikler))
+    eslesme = _HESAPLAMA_BASI.search(metin)
+    if eslesme is None:
+        return None
+    bas = eslesme.end() - 1
+    derinlik = 0
+    for konum in range(bas, len(metin)):
+        if metin[konum] == "(":
+            derinlik += 1
+        elif metin[konum] == ")":
+            derinlik -= 1
+            if derinlik == 0:
+                return metin[bas + 1 : konum]
+    return metin[bas + 1 :]
+
+
+def hesaplamada_kullanilan_sutunlar(sutun: Sutun) -> frozenset[str]:
+    # Yalnız ifadenin içindeki tanımlayıcılar: tırnaklı adlar olduğu gibi,
+    # çıplak adlar "(" ile sürmüyorsa (işlev adı değilse). Metin sabitleri
+    # ifade alınırken boşaltıldı; başka tablo adı ya da REFERENCES buraya girmez.
+    ifade = hesaplama_ifadesi(sutun)
+    if ifade is None:
+        return frozenset()
+    adlar: set[str] = set()
+    for eslesme in _TANIMLAYICI.finditer(ifade):
+        tirnakli = eslesme.group(1) or eslesme.group(2) or eslesme.group(3)
+        if tirnakli:
+            adlar.add(tirnakli.casefold())
+        elif eslesme.group(5) is None:
+            adlar.add(eslesme.group(4).casefold())
+    return frozenset(adlar)
 
 
 def paketi_sirala(paket: YapiPaketi) -> tuple[YapiIsi, ...]:
@@ -391,6 +431,7 @@ def paketi_sirala(paket: YapiPaketi) -> tuple[YapiIsi, ...]:
             if is_.tablo in kurulanlar:
                 raise GecersizPaket(f"{is_.tablo}: paket aynı tabloyu iki kez kuramaz")
             kurulanlar.add(is_.tablo)
+    _hesaplama_dongusunu_reddet(isler)
     oncekiler = [
         [b for b, diger in enumerate(isler) if b != s and _once_gelir(diger, is_)]
         for s, is_ in enumerate(isler)
@@ -412,11 +453,47 @@ def paketi_sirala(paket: YapiPaketi) -> tuple[YapiIsi, ...]:
     return tuple(isler[s] for s in sirali)
 
 
+def _hesaplama_dongusunu_reddet(isler: tuple[YapiIsi, ...]) -> None:
+    # Hesaplanan sütunlar birbirine dayanıyorsa sıra yoktur; sessizce kırmak
+    # yerine paket açık hatayla reddedilir (verilen sıra çözüm sayılmaz).
+    eklemeler = [is_ for is_ in isler if isinstance(is_, SutunEklemeIstegi)]
+    dayandigi = {
+        id(s): [d for d in eklemeler if d is not s and _once_gelir(d, s)]
+        for s in eklemeler
+    }
+    durum: dict[int, str] = {}
+    yol: list[SutunEklemeIstegi] = []
+
+    def gez(s: SutunEklemeIstegi) -> None:
+        durum[id(s)] = "yolda"
+        yol.append(s)
+        for d in dayandigi[id(s)]:
+            if durum.get(id(d)) == "yolda":
+                baslangic = next(i for i, y in enumerate(yol) if y is d)
+                zincir = [y.sutun.ad for y in yol[baslangic:]] + [d.sutun.ad]
+                raise GecersizPaket(
+                    f"{s.tablo}: hesaplanan sütunlar döngü oluşturuyor: "
+                    + " → ".join(zincir)
+                )
+            if id(d) not in durum:
+                gez(d)
+        yol.pop()
+        durum[id(s)] = "bitti"
+
+    for s in eklemeler:
+        if id(s) not in durum:
+            gez(s)
+
+
 def _once_gelir(a: YapiIsi, b: YapiIsi) -> bool:
     match a:
         case TabloOlusturmaIstegi():
             return a.tablo == _dokunulan_tablo(b) or a.tablo in _basvurulan_tablolar(b)
         case SutunEklemeIstegi():
+            if isinstance(b, SutunEklemeIstegi):
+                return b.tablo == a.tablo and (
+                    a.sutun.ad.casefold() in hesaplamada_kullanilan_sutunlar(b.sutun)
+                )
             return (
                 isinstance(b, SutunOzelligiDegistirmeIstegi | IndeksOlusturmaIstegi)
                 and b.tablo == a.tablo

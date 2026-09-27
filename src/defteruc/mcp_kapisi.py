@@ -151,8 +151,10 @@ ARAC_YAPI_PAKETI_ACIKLAMASI = (
     "sutun_ozelligi_degistirme, indeks_olusturma, indeks_silme) ve o türün tek "
     "başına aldığı alanlarla verilir. Uygulanma sırasını sistem belirler "
     "(REFERENCES ile başvurulan tablo önce, tabloyu kuran iş ona dokunanlardan "
-    "önce); verilen sıra önemsizdir. Yanıttaki sql sıralı cümleler, ozet "
-    "uygulanma sırasıdır." + ISTEK_ACIKLAMA_KUYRUGU
+    "önce, indeks silme yeniden kurmadan önce, hesaplanan sütun (GENERATED ... AS "
+    "(ifade)) ifadesinde geçen sütunların eklenmesinden sonra); verilen sıra "
+    "önemsizdir. Hesaplanan sütunlar birbirine dayanıyorsa paket reddedilir. "
+    "Yanıttaki sql sıralı cümleler, ozet uygulanma sırasıdır." + ISTEK_ACIKLAMA_KUYRUGU
 )
 ARAC_ISTEK_DURUMU_ACIKLAMASI = (
     "Talep kimliğiyle yapı isteğinin durumunu döndürür: BEKLIYOR, UYGULANDI, "
