@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from sqlalchemy import Connection
 from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
 from defteruc.cekirdek import yapi
@@ -15,7 +13,6 @@ Deger = yapi.Deger
 
 SINIR_VARSAYILAN = 100
 SINIR_AZAMI = 1000
-YASAK_ISLEVLER = frozenset({"load_extension"})
 
 
 class OkumaHatasi(Exception): ...
@@ -55,7 +52,7 @@ def satirlari_oku(
             baglanti = oturum.connection()
             kimlik = yapi.satir_kimligi(baglanti, tablo)
             secim = yapi.kimlik_secimi(kimlik)
-            with _yalniz_okuma(baglanti):
+            with yapi.YetkiKancasi(baglanti, yapi.okuma_yetkisi):
                 # Toplam ve sayfa aynı sorgu akışından alınır. Ayrı count(*)
                 # değişken koşulu yeniden çalıştırıp farklı bir küme seçerdi.
                 # Bütün sonuçlar sayılır; bellekte yalnız istenen sayfa tutulur.
@@ -105,35 +102,3 @@ def satirlari_oku(
         anahtar_sutunlari=kimlik.sutunlar,
         anahtarlar=anahtarlar,
     )
-
-
-class _yalniz_okuma:
-    def __init__(self, baglanti: Connection) -> None:
-        ham = baglanti.connection.dbapi_connection
-        if not isinstance(ham, sqlite3.Connection):  # pragma: no cover
-            raise OkumaHatasi("okuma yalnız sqlite3 bağlantısında kısıtlanabilir")
-        self._baglanti = baglanti
-        self._ham = ham
-
-    def __enter__(self) -> None:
-        self._ham.set_authorizer(_yetki)
-
-    def __exit__(self, *_: object) -> None:
-        try:
-            self._ham.set_authorizer(None)
-        except Exception:
-            self._baglanti.invalidate()
-            raise
-
-
-def _yetki(eylem: int, birinci: str | None, ikinci: str | None, *_: object) -> int:
-    if eylem == sqlite3.SQLITE_SELECT:
-        return sqlite3.SQLITE_OK
-    if eylem == sqlite3.SQLITE_READ:
-        tablo = birinci or ""
-        if tablo.startswith(yapi.SISTEM_ON_EKI) or tablo.startswith("sqlite_"):
-            return sqlite3.SQLITE_DENY
-        return sqlite3.SQLITE_OK
-    if eylem == sqlite3.SQLITE_FUNCTION:
-        return sqlite3.SQLITE_DENY if ikinci in YASAK_ISLEVLER else sqlite3.SQLITE_OK
-    return sqlite3.SQLITE_DENY

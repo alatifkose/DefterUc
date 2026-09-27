@@ -38,6 +38,7 @@ ARAC_BEKLEYEN_ISTEKLER = "bekleyen_istekler"
 ARAC_YAPIYI_OKU = "yapiyi_oku"
 ARAC_SATIR_EKLE = "satir_ekle"
 ARAC_SATIRLARI_OKU = "satirlari_oku"
+ARAC_SATIRLARI_GUNCELLE = "satirlari_guncelle"
 ARACLAR = (
     ARAC_SISTEM_DURUMU,
     ARAC_TABLO_OLUSTURMA_ISTEGI,
@@ -51,6 +52,7 @@ ARACLAR = (
     ARAC_YAPIYI_OKU,
     ARAC_SATIR_EKLE,
     ARAC_SATIRLARI_OKU,
+    ARAC_SATIRLARI_GUNCELLE,
 )
 SURUM_BILINMIYOR = "bilinmiyor"
 
@@ -60,6 +62,7 @@ OLAY_MCP_HATASI = "mcp_hatasi"
 OLAY_MCP_EL_SIKISMA = "mcp_el_sikisma"
 OLAY_MCP_YAPI_ISTEGI = "mcp_yapi_istegi"
 OLAY_MCP_KAYIT = "mcp_kayit"
+OLAY_MCP_GUNCELLEME = "mcp_guncelleme"
 ISTEMCI_BILINMIYOR = "bilinmiyor"
 
 SUNUCU_TALIMATI = (
@@ -93,6 +96,9 @@ SUNUCU_TALIMATI = (
     "onay alamazsın ve onayı bekletemezsin. Aynı talep kimliğiyle istek_durumu "
     "aracını sorarak sonucu öğren (UYGULANDI, REDDEDILDI, UYGULANAMADI). Tablo "
     "hazır olduğunda satırları satir_ekle ile yaz; satır eklemek onay gerektirmez. "
+    "Var olan satırı satirlari_guncelle ile koşulla değiştir; bu da onay "
+    "gerektirmez, koşulsuz güncelleme yoktur, tek satır değiştirirken beklenen=1 "
+    "ver. "
     "Yazılan satırlar ve kimlikleri satirlari_oku ile okunur; bir kaydı başka bir "
     "kayda bağlamadan ya da aynı kaydın var olup olmadığına karar vermeden önce "
     "oku. "
@@ -181,6 +187,16 @@ ARAC_SATIRLARI_OKU_ACIKLAMASI = (
     "ile aynı sözleşme) ve devamı olup olmadığı (devami_var); devamı için baslangic = "
     "baslangic + donen ile yeniden çağır. Sıra birincil anahtara göredir. "
     "Yalnız okur; sistem tabloları okunamaz."
+)
+ARAC_SATIRLARI_GUNCELLE_ACIKLAMASI = (
+    "Var olan satırları değiştirir; onay gerektirmez. kosul: SQL WHERE ifadesi "
+    "(zorunlu; koşulsuz güncelleme yoktur; parametre yerleri ? ile, değerler "
+    "parametreler listesinde); degerler: sütun adı → yeni değer sözlüğü (satir_ekle "
+    "ile aynı değer biçimleri); beklenen: koşula uyması gereken satır sayısı, "
+    "verilirse ve tutmazsa hiçbir satır değişmez (tek satır değiştirirken 1 ver). "
+    "Hepsi tek işlemde: biri kısıta takılırsa hiçbiri değişmez. Yanıt: "
+    "guncellenen sayı ve değişen satırların anahtarları (satir_ekle ile aynı "
+    "sözleşme). Sistem tabloları değiştirilemez, koşuldan da okunamaz."
 )
 
 
@@ -545,6 +561,37 @@ def sunucu_kur(ayarlar: Ayarlar) -> MCPServer[None]:
             "donen": sonuc.donen,
             "baslangic": sonuc.baslangic,
             "devami_var": sonuc.devami_var,
+        }
+
+    @sunucu.tool(
+        name=ARAC_SATIRLARI_GUNCELLE, description=ARAC_SATIRLARI_GUNCELLE_ACIKLAMASI
+    )
+    def satirlari_guncelle(
+        tablo: str,
+        kosul: str,
+        degerler: dict[str, GirdiDegeri],
+        parametreler: tuple[GirdiDegeri, ...] = (),
+        beklenen: int | None = None,
+    ) -> dict[str, object]:
+        try:
+            sonuc = kayit.satirlari_guncelle(
+                veritabani,
+                tablo,
+                kosul,
+                [iceri(d) for d in parametreler],
+                {ad: iceri(d) for ad, d in degerler.items()},
+                beklenen,
+            )
+        except (motor.MotorHatasi, kayit.KayitHatasi, VeritabaniMesgul) as hata:
+            raise ToolError(str(hata)) from hata
+        gunluk.olay_kaydet(
+            OLAY_MCP_GUNCELLEME, f"tablo={tablo} guncellenen={sonuc.guncellenen}"
+        )
+        return {
+            "tablo": tablo,
+            "guncellenen": sonuc.guncellenen,
+            "anahtar_sutunlari": list(sonuc.anahtar_sutunlari),
+            "anahtarlar": [[disari(d) for d in a] for a in sonuc.anahtarlar],
         }
 
     return sunucu

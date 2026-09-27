@@ -1036,3 +1036,76 @@ def test_sunucu_talimati_kararlar_tablosunu_soyler() -> None:
     talimat = mcp_kapisi.SUNUCU_TALIMATI.casefold()
     for parca in ("kararlar", "işe başlamadan", "uy", "açıkça"):
         assert parca in talimat, parca
+
+
+# --- satır güncelleme aracı ---------------------------------------------------------
+
+
+def _kisiler_tablosunu_ac(sunucu: Any, ayar: ay.Ayarlar) -> None:
+    yanit = _cagir(sunucu, mcp_kapisi.ARAC_TABLO_OLUSTURMA_ISTEGI, KISILER_ARGUMANLARI)
+    onaylayan = vt.Veritabani(ayar.veritabani_yolu)
+    try:
+        kimlik = int(yanit["talep_kimligi"])
+        gorulen = onay.kayit_getir(onaylayan, kimlik)
+        kayit = onay.onayla(
+            onaylayan, kimlik, gorulen_onizleme=onay.onizleme_kodu(gorulen)
+        )
+        assert kayit.durum is onay.Durum.UYGULANDI, kayit.sonuc
+    finally:
+        onaylayan.kapat()
+
+
+def test_satirlari_guncelle_araci_kosulla_gunceller_ve_anahtar_doner(
+    test_koku: Path,
+) -> None:
+    ayar = ay.ayarlari_yukle()
+    ay.dizinleri_hazirla(ayar)
+    gunluk.gunlugu_kur(ayar.log_dizini)
+    sunucu = mcp_kapisi.sunucu_kur(ayar)
+    assert mcp_kapisi.ARAC_SATIRLARI_GUNCELLE in mcp_kapisi.ARACLAR
+    _kisiler_tablosunu_ac(sunucu, ayar)
+    _cagir(
+        sunucu,
+        mcp_kapisi.ARAC_SATIR_EKLE,
+        {"tablo": "kisiler", "satirlar": [{"ad_soyad": "Ayşe"}, {"ad_soyad": "Ali"}]},
+    )
+    yanit = _cagir(
+        sunucu,
+        mcp_kapisi.ARAC_SATIRLARI_GUNCELLE,
+        {
+            "tablo": "kisiler",
+            "kosul": "ad_soyad = ?",
+            "parametreler": ["Ali"],
+            "degerler": {"ad_soyad": "Ali Veli"},
+            "beklenen": 1,
+        },
+    )
+    assert yanit == {
+        "tablo": "kisiler",
+        "guncellenen": 1,
+        "anahtar_sutunlari": ["id"],
+        "anahtarlar": [[2]],
+    }
+    okunan = _cagir(sunucu, mcp_kapisi.ARAC_SATIRLARI_OKU, {"tablo": "kisiler"})
+    assert [s[1] for s in okunan["satirlar"]] == ["Ayşe", "Ali Veli"]
+    assert "beklenen 1" in _hata(
+        sunucu,
+        mcp_kapisi.ARAC_SATIRLARI_GUNCELLE,
+        {
+            "tablo": "kisiler",
+            "kosul": "id > ?",
+            "parametreler": [0],
+            "degerler": {"ad_soyad": "x"},
+            "beklenen": 1,
+        },
+    )
+    assert "koşul" in _hata(
+        sunucu,
+        mcp_kapisi.ARAC_SATIRLARI_GUNCELLE,
+        {"tablo": "kisiler", "kosul": "", "degerler": {"ad_soyad": "x"}},
+    )
+    okunan = _cagir(sunucu, mcp_kapisi.ARAC_SATIRLARI_OKU, {"tablo": "kisiler"})
+    assert [s[1] for s in okunan["satirlar"]] == ["Ayşe", "Ali Veli"]
+    gunluk_metni = (ayar.log_dizini / gunluk.GUNLUK_DOSYA_ADI).read_text("utf-8")
+    assert "mcp_guncelleme | tablo=kisiler guncellenen=1" in gunluk_metni
+    assert "Ali Veli" not in gunluk_metni

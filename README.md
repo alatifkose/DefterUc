@@ -211,6 +211,11 @@ Git geçmişinde durur (son hâli `e77a222`). Kalanlar:
 * **Satır okuma** (`cekirdek/okuma.py`, 2026-09-25): koşul ve parametreyle,
   sayfalı; SQLite yetkilendirme kancasıyla yalnız okuma, sistem tabloları
   alt sorgudan da erişilemez. Ayrıntı "Satır okuma" bölümünde.
+* **Satır güncelleme** (`cekirdek/kayit.py`, 2026-09-27, karar: Abdüllatif):
+  var olan satırlar koşulla değiştirilir, onaysız, tek transaction,
+  değişen satırların anahtarı döner; koşulsuz güncelleme yoktur, `beklenen`
+  sayı tutmazsa hiçbiri değişmez. MCP aracı `satirlari_guncelle`. Ayrıntı
+  "Satır okuma" bölümünün sonunda.
 * **Kilit hatası anlamlı** (`VeritabaniMesgul`, 2026-09-25): iki süreç aynı
   anda yazınca bekleyen taraf 10 s bekler, sonra iş yapılmadan anlaşılır hata
   alır. Ayrıntı "Veritabanı" bölümünde.
@@ -556,6 +561,33 @@ Başlangıç: temiz `yeniden-insa`, yerel/uzak commit
   açık anahtarlı sonuçlarda tüm değerleri okumanın ek maliyeti yukarıda
   açıklanmıştır. Ayrı çağrıların rastgele kümeleri aynı olmak zorunda değildir.
 
+### Satır güncelleme
+
+`kayit.satirlari_guncelle(veritabani, tablo, kosul, parametreler, degerler,
+beklenen)` (2026-09-27, karar: Abdüllatif; ihtiyaç: fiş denemesinde açılan
+ödeme aracı bağlantısı var olan fişe yazılamıyordu). Veri işlemidir, yapı
+değişmez; kayıt gibi **onaysızdır**. Koşul zorunludur ve okuma ile aynı
+kuraldan geçer (parça kuralı, `?` parametreleri, metne gömme yok); boş
+koşul reddedilir, koşulsuz güncelleme yoktur. `degerler` boş olamaz, sütun
+adları ad kuralından geçer; sistem tablosu adı daha bağlantı açılmadan ad
+kuralına takılır. Tek transaction: önce yazma kilidi (`yazma_kilidi_al`),
+sonra satır kimliği (`satir_kimligi`, okuma ve ekleme ile aynı sözleşme),
+sonra `UPDATE ... RETURNING <kimlik>`; kısıt ihlali (UNIQUE, yabancı anahtar,
+CHECK) hepsini geri alır. `beklenen` verilmişse koşula uyan satır sayısı
+birebir tutmalıdır, tutmazsa iş geri alınır ve `KayitHatasi` verir; Cowork
+tek satırı değiştirirken 1 verir. Koşul, SQLite yetkilendirme kancasıyla
+sınırlıdır (`yapi.YetkiKancasi` + `yapi.okuma_yetkisi`, okuma ile aynı
+kanca; ek olarak yalnız hedef tabloda `UPDATE` serbesttir): koşuldaki alt
+sorgu sistem tablolarına ve `sqlite_*`'a ulaşamaz, `load_extension`, PRAGMA,
+ATTACH, silme ve başka tabloyu güncelleme yasaktır; kanca iş bitince
+kalkar, kalkamazsa bağlantı geçersizleştirilir. Davranış önce betikle
+doğrulandı (`UPDATE ... RETURNING` rowid, bileşik anahtar ve sıfır eşleşme;
+kanca altında sistem tablosu alt sorgusu "prohibited", başka tablo, PRAGMA
+ve DELETE "not authorized"), sonra testle kanıtlandı
+(`tests/test_yapi_ve_kayit.py`, `tests/test_mcp_kapisi.py`). Dönen anahtar
+sırası SQLite'ın verdiği sıradır. Satır silme aracı yoktur (ihtiyaç
+çıkmadı, ayrıca konuşulur).
+
 ## Veritabanı
 
 Aşama 4.1 (2026-09-18). Güvenilir persistence temeli. Hazır uygulama tablosu
@@ -895,6 +927,7 @@ Araçlar (2026-09-25; adları `ARACLAR`):
 | `yapiyi_oku` | Tablolar: ad, `CREATE TABLE` cümlesi, sütunlar (`table_xinfo`), indeksler (benzersizlik `PRAGMA index_list`'ten, SQL metninden değil), satır sayısı. Sistem tabloları (`_defteruc_*`) ve `sqlite_*` listede yoktur; önek karşılaştırmasında alt çizgi kaçırılır, `sqliteverileri` gibi kullanıcı tabloları görünür (dış inceleme 7dba285 bulgu 5 ve 6). | - |
 | `satir_ekle` | Mevcut tabloya satırlar yazar (kayıt); hepsi tek transaction, biri düşerse hiçbiri yazılmaz. Her satırın anahtarı yanıtta. | yok |
 | `satirlari_oku` | Koşul, parametre, sınır ve başlangıçla satır okur; koşula uyan toplam ve devamı olup olmadığı yanıtta. Yalnız okur, sistem tabloları alt sorgudan da kapalı. | - |
+| `satirlari_guncelle` | Var olan satırları koşulla değiştirir; `degerler` sütun → yeni değer, `beklenen` verilirse uyan satır sayısı tutmalı. Tek işlem; değişen satırların anahtarı yanıtta. Sistem tabloları değiştirilemez, koşuldan okunamaz. | yok |
 
 Yapı isteği araçları isteği uygulamaz: motorun SQL üretimiyle doğrular
 (geçersiz ad ya da parça araç hatasıdır), `BEKLIYOR` yazar ve yanıtta talep
@@ -990,7 +1023,8 @@ Günlük yalnızca ayarlardaki log dizinine yazar: `<log dizini>/defteruc.log`
 
 Her satır `zaman | seviye | olay | mesaj` biçimindedir; olay türleri
 şimdilik `baslangic`, `baslangic_hatasi`, `onay_karari`, `mcp_baslangic`,
-`mcp_el_sikisma`, `mcp_yapi_istegi`, `mcp_kayit`, `mcp_kapanis`, `mcp_hatasi`. Dosya günlüğüne bağlanan dış kütüphane
+`mcp_el_sikisma`, `mcp_yapi_istegi`, `mcp_kayit`, `mcp_guncelleme`,
+`mcp_kapanis`, `mcp_hatasi`. Dosya günlüğüne bağlanan dış kütüphane
 kayıtlarında olay `-` olur.
 
 Saklama sınırı: dosya 1.000.000 baytı aşınca döndürülür, en fazla 5 eski
@@ -1158,7 +1192,7 @@ src/defteruc/    uygulama paketi
     motor.py        yapı işleri: tablo, sütun, sütun özelliği, indeks, yapı paketi (sıra); ham SQL
     onay.py         yapı istekleri: sistem tablosu, bekleyenler, onay ve ret
     yapi.py         mevcut yapıyı okuma (tablolar, sütunlar, indeksler, satır sayısı)
-    kayit.py        satır ekleme (kayıt): onaysız, tek transaction, anahtar döner
+    kayit.py        satır ekleme (kayıt) ve koşullu güncelleme: onaysız, tek transaction, anahtar döner
     okuma.py        satır okuma: koşul, sayfalama, yetkilendirme kancasıyla yalnız okuma
     arsiv.py        gelen dizini sınırı, akışla SHA-256, içerik adresli atomik arşiv, bütünlük
   finans/         finansal domain; çekirdeği kullanabilir (boş)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from sqlalchemy import Connection
@@ -116,6 +117,53 @@ def kimlik_secimi(kimlik: Kimlik) -> str:
     if kimlik.ortuk:
         return kimlik.sutunlar[0]
     return ", ".join(f'"{ad}"' for ad in kimlik.sutunlar)
+
+
+# --- yetkilendirme kancası: koşul ve alt sorgu sistem tablolarına ulaşamaz ----------
+
+YASAK_ISLEVLER = frozenset({"load_extension"})
+
+type Yetki = Callable[[int, str | None, str | None], int]
+
+
+def okuma_yetkisi(eylem: int, birinci: str | None, ikinci: str | None) -> int:
+    if eylem == sqlite3.SQLITE_SELECT:
+        return sqlite3.SQLITE_OK
+    if eylem == sqlite3.SQLITE_READ:
+        tablo = birinci or ""
+        if tablo.startswith(SISTEM_ON_EKI) or tablo.startswith("sqlite_"):
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+    if eylem == sqlite3.SQLITE_FUNCTION:
+        return sqlite3.SQLITE_DENY if ikinci in YASAK_ISLEVLER else sqlite3.SQLITE_OK
+    return sqlite3.SQLITE_DENY
+
+
+class YetkiKancasi:
+    def __init__(self, baglanti: Connection, yetki: Yetki) -> None:
+        ham = baglanti.connection.dbapi_connection
+        if not isinstance(ham, sqlite3.Connection):  # pragma: no cover
+            raise RuntimeError("yetki kancası yalnız sqlite3 bağlantısına takılır")
+        self._baglanti = baglanti
+        self._ham = ham
+        self._yetki = yetki
+
+    def __enter__(self) -> None:
+        yetki = self._yetki
+
+        def kanca(
+            eylem: int, birinci: str | None, ikinci: str | None, *_: object
+        ) -> int:
+            return yetki(eylem, birinci, ikinci)
+
+        self._ham.set_authorizer(kanca)
+
+    def __exit__(self, *_: object) -> None:
+        try:
+            self._ham.set_authorizer(None)
+        except Exception:
+            self._baglanti.invalidate()
+            raise
 
 
 def yapiyi_oku(veritabani: Veritabani) -> tuple[TabloBilgisi, ...]:

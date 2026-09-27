@@ -495,3 +495,155 @@ def test_replace_politikasinda_eklenen_yurutulen_ekleme_sayisidir(
     assert sonuc == kayit.EklemeSonucu(2, ("rowid",), ((1,), (2,)))
     kalan = okuma.satirlari_oku(veritabani, "replace_probe")
     assert kalan.anahtarlar == ((2,),) and kalan.satirlar == (("A", "second"),)
+
+
+# --- satır güncelleme: onaysız, koşullu, tek transaction, anahtarlar döner ------------
+
+TELEFONLAR = motor.TabloOlusturmaIstegi(
+    "telefonlar",
+    (
+        motor.Sutun("id", ("INTEGER", "PRIMARY KEY")),
+        motor.Sutun("kisi_id", ("INTEGER", "NOT NULL", "REFERENCES kisiler(id)")),
+        motor.Sutun("numara", ("TEXT",)),
+    ),
+)
+
+
+def _kisiler_hazirla(v: vt.Veritabani) -> None:
+    _uygula(v, KISILER)
+    kayit.satirlar_ekle(
+        v, "kisiler", [{"ad_soyad": "Ayşe"}, {"ad_soyad": "Ali"}, {"ad_soyad": "Veli"}]
+    )
+
+
+def _puanlar(v: vt.Veritabani) -> list[tuple[object, ...]]:
+    return _satirlar(v, "SELECT id, puan FROM kisiler ORDER BY id")
+
+
+def test_satirlar_kosulla_guncellenir_ve_anahtarlar_doner(
+    veritabani: vt.Veritabani,
+) -> None:
+    _kisiler_hazirla(veritabani)
+    sonuc = kayit.satirlari_guncelle(
+        veritabani, "kisiler", "ad_soyad IN (?, ?)", ["Ali", "Veli"], {"puan": 5.0}
+    )
+    assert sonuc.guncellenen == 2
+    assert sonuc.anahtar_sutunlari == ("id",)
+    assert sorted(sonuc.anahtarlar) == [(2,), (3,)]
+    assert _puanlar(veritabani) == [(1, 0.0), (2, 5.0), (3, 5.0)]
+
+
+def test_guncelleme_beklenen_sayi_tutmazsa_geri_alinir(
+    veritabani: vt.Veritabani,
+) -> None:
+    _kisiler_hazirla(veritabani)
+    with pytest.raises(kayit.KayitHatasi, match="beklenen 1"):
+        kayit.satirlari_guncelle(
+            veritabani, "kisiler", "puan = ?", [0], {"puan": 1.0}, beklenen=1
+        )
+    with pytest.raises(kayit.KayitHatasi, match="beklenen 1"):
+        kayit.satirlari_guncelle(
+            veritabani, "kisiler", "id = ?", [99], {"puan": 1.0}, beklenen=1
+        )
+    assert _puanlar(veritabani) == [(1, 0.0), (2, 0.0), (3, 0.0)]
+    sonuc = kayit.satirlari_guncelle(
+        veritabani, "kisiler", "id = ?", [2], {"puan": 1.0}, beklenen=1
+    )
+    assert sonuc.guncellenen == 1 and sonuc.anahtarlar == ((2,),)
+    sifir = kayit.satirlari_guncelle(
+        veritabani, "kisiler", "id = ?", [99], {"puan": 1.0}
+    )
+    assert sifir.guncellenen == 0 and sifir.anahtarlar == ()
+
+
+def test_guncelleme_kosulsuz_degersiz_ve_bozuk_girdi_dokunmadan_reddedilir(
+    veritabani: vt.Veritabani,
+) -> None:
+    _kisiler_hazirla(veritabani)
+    with pytest.raises(kayit.KayitHatasi, match="koşul"):
+        kayit.satirlari_guncelle(veritabani, "kisiler", "", [], {"puan": 1.0})
+    with pytest.raises(kayit.KayitHatasi, match="koşul"):
+        kayit.satirlari_guncelle(veritabani, "kisiler", "   ", [], {"puan": 1.0})
+    with pytest.raises(kayit.KayitHatasi, match="değer"):
+        kayit.satirlari_guncelle(veritabani, "kisiler", "id = 1", [], {})
+    with pytest.raises(motor.GecersizParca):
+        kayit.satirlari_guncelle(
+            veritabani, "kisiler", "id = 1; DROP TABLE kisiler", [], {"puan": 1.0}
+        )
+    with pytest.raises(motor.GecersizAd):
+        kayit.satirlari_guncelle(veritabani, "kisiler", "id = 1", [], {"Puan": 1.0})
+    with pytest.raises(motor.GecersizAd):
+        kayit.satirlari_guncelle(
+            veritabani, onay.SISTEM_TABLOSU, "kimlik = 1", [], {"durum": "UYGULANDI"}
+        )
+    assert _puanlar(veritabani) == [(1, 0.0), (2, 0.0), (3, 0.0)]
+    assert "kisiler" in {t.ad for t in yapi.yapiyi_oku(veritabani)}
+
+
+def test_guncelleme_kosulu_sistem_tablosuna_ulasamaz_yapi_islemi_yapamaz(
+    veritabani: vt.Veritabani,
+) -> None:
+    _kisiler_hazirla(veritabani)
+    for kosul in (
+        "ad_soyad = (SELECT sql FROM _defteruc_yapi_istekleri)",
+        "ad_soyad = (SELECT sql FROM sqlite_master)",
+        "load_extension('x') IS NULL",
+    ):
+        with pytest.raises(kayit.KayitHatasi):
+            kayit.satirlari_guncelle(veritabani, "kisiler", kosul, [], {"puan": 1.0})
+    assert _puanlar(veritabani) == [(1, 0.0), (2, 0.0), (3, 0.0)]
+    sonuc = kayit.satirlari_guncelle(
+        veritabani, "kisiler", "id = (SELECT max(id) FROM kisiler)", [], {"puan": 2.0}
+    )
+    assert sonuc.anahtarlar == ((3,),)
+    kayit.satirlar_ekle(veritabani, "kisiler", [{"ad_soyad": "Can"}])
+    with veritabani.islem() as oturum:
+        assert oturum.execute(text("PRAGMA foreign_keys")).scalar_one() == 1
+
+
+def test_guncelleme_kisit_ihlalinde_hicbir_satir_degismez(
+    veritabani: vt.Veritabani,
+) -> None:
+    _kisiler_hazirla(veritabani)
+    _uygula(veritabani, TELEFONLAR)
+    kayit.satirlar_ekle(veritabani, "telefonlar", [{"kisi_id": 1, "numara": "5"}])
+    with pytest.raises(kayit.KayitHatasi, match="UNIQUE"):
+        kayit.satirlari_guncelle(
+            veritabani, "kisiler", "id IN (2, 3)", [], {"ad_soyad": "Aynı"}
+        )
+    with pytest.raises(kayit.KayitHatasi, match="FOREIGN KEY"):
+        kayit.satirlari_guncelle(
+            veritabani, "telefonlar", "id = 1", [], {"kisi_id": 99}
+        )
+    assert _satirlar(veritabani, "SELECT ad_soyad FROM kisiler ORDER BY id") == [
+        ("Ayşe",),
+        ("Ali",),
+        ("Veli",),
+    ]
+    assert _satirlar(veritabani, "SELECT kisi_id FROM telefonlar") == [(1,)]
+
+
+def test_guncelleme_bilesik_anahtar_ve_ortuk_rowid_doner(
+    veritabani: vt.Veritabani,
+) -> None:
+    _uygula(
+        veritabani,
+        motor.TabloOlusturmaIstegi(
+            "w",
+            (
+                motor.Sutun("a", ("TEXT", "NOT NULL")),
+                motor.Sutun("b", ("INTEGER", "NOT NULL")),
+                motor.Sutun("v", ("TEXT",)),
+            ),
+            kisitlar=("PRIMARY KEY (a, b)",),
+            secenekler=("WITHOUT ROWID",),
+        ),
+    )
+    _uygula(veritabani, motor.TabloOlusturmaIstegi("n", (motor.Sutun("v", ("TEXT",)),)))
+    kayit.satirlar_ekle(veritabani, "w", [{"a": "k", "b": 1, "v": "eski"}])
+    kayit.satirlar_ekle(veritabani, "n", [{"v": "eski"}, {"v": "eski"}])
+    w = kayit.satirlari_guncelle(veritabani, "w", "a = ?", ["k"], {"v": "yeni"})
+    assert w.anahtar_sutunlari == ("a", "b") and w.anahtarlar == (("k", 1),)
+    n = kayit.satirlari_guncelle(veritabani, "n", "v = ?", ["eski"], {"v": "yeni"})
+    assert n.anahtar_sutunlari == ("rowid",) and sorted(n.anahtarlar) == [(1,), (2,)]
+    assert _satirlar(veritabani, "SELECT v FROM n") == [("yeni",), ("yeni",)]
