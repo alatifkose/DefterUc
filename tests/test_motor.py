@@ -2288,11 +2288,11 @@ def test_metin_sabiti_islev_adi_ve_baska_tablo_bagimlilik_sayilmaz() -> None:
 def test_hesaplanan_sutunlar_dongu_olusturursa_paket_acikca_reddedilir() -> None:
     a = _ekle("a", "INTEGER", "GENERATED ALWAYS AS (b * 2) VIRTUAL")
     b = _ekle("b", "INTEGER", "GENERATED ALWAYS AS (a * 2) VIRTUAL")
-    with pytest.raises(m.GecersizPaket, match="döngü"):
+    with pytest.raises(m.HesaplamaDongusu, match="hesaplama döngüsü"):
         _sira(a, b)
     c = _ekle("c", "INTEGER", "AS (a + 1)")
     a2 = _ekle("a", "INTEGER", "AS (c + 1)")
-    with pytest.raises(m.GecersizPaket, match="döngü"):
+    with pytest.raises(m.HesaplamaDongusu, match="hesaplama döngüsü"):
         _sira(c, a2, BASE)
 
 
@@ -2370,3 +2370,61 @@ def test_hesaplama_ve_kisit_bagimliliklari_ayri_okunur() -> None:
     assert m.hesaplama_bagimliliklari(m.Sutun("k", ("INTEGER", "AS (kod * 2)"))) == {
         "kod"
     }
+
+
+# --- plan commit 2: hesaplama döngüsü ön denetimi, üç tanım yolunda ortak -----------
+
+
+def test_kendine_dayanan_hesaplanan_sutun_ekleme_istek_yazilmadan_reddedilir() -> None:
+    with pytest.raises(m.HesaplamaDongusu, match="hesaplama döngüsü.*a → a"):
+        m.sutun_ekleme_sql(_ekle("a", "INTEGER", "AS (a + 1)"))
+    with pytest.raises(m.HesaplamaDongusu, match="a → a"):
+        m.istek_sql(m.YapiPaketi((_ekle("a", "INTEGER", "AS (a + 1)"),)))
+
+
+def test_tablo_tanimindaki_karsilikli_ve_dolayli_dongu_reddedilir() -> None:
+    karsilikli = m.TabloOlusturmaIstegi(
+        "t",
+        (
+            m.Sutun("id", ("INTEGER", "PRIMARY KEY")),
+            m.Sutun("a", ("INTEGER", "AS (b + 1)")),
+            m.Sutun("b", ("INTEGER", "AS(a + 1)")),
+        ),
+    )
+    with pytest.raises(m.HesaplamaDongusu, match="a → b → a"):
+        m.tablo_olusturma_sql(karsilikli)
+    dolayli = m.TabloOlusturmaIstegi(
+        "t",
+        (
+            m.Sutun("a", ("INTEGER", "AS (c * 2)")),
+            m.Sutun("b", ("INTEGER", "AS (a * 2)")),
+            m.Sutun("c", ("INTEGER", "AS (b * 2)")),
+        ),
+    )
+    with pytest.raises(m.HesaplamaDongusu, match="a → c → b → a"):
+        m.tablo_olusturma_sql(dolayli)
+
+
+def test_yeniden_kurma_tanimindaki_dongu_reddedilir() -> None:
+    istek = m.SutunOzelligiDegistirmeIstegi(
+        "t",
+        (
+            m.Sutun("id", ("INTEGER", "PRIMARY KEY")),
+            m.Sutun("a", ("INTEGER", "AS (a * 2)")),
+        ),
+    )
+    with pytest.raises(m.HesaplamaDongusu, match="a → a"):
+        m.sutun_ozelligi_degistirme_sql(istek)
+
+
+def test_dongu_olmayan_hesaplama_ve_kendine_check_gecer() -> None:
+    tanim = m.TabloOlusturmaIstegi(
+        "t",
+        (
+            m.Sutun("kod", ("INTEGER",)),
+            m.Sutun("k", ("INTEGER", "AS (kod * 2)", "CHECK (k > 0)")),
+            m.Sutun("kk", ("INTEGER", "AS (k + kod)")),
+        ),
+    )
+    assert m.tablo_olusturma_sql(tanim).startswith('CREATE TABLE "t"')
+    assert m.sutun_ekleme_sql(_ekle("k", "INTEGER", "AS (kod * 2)", "CHECK (k > 0)"))

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from itertools import pairwise
@@ -38,6 +38,9 @@ class KisitlarUyusmuyor(MotorHatasi): ...
 
 
 class GecersizPaket(MotorHatasi, ValueError): ...
+
+
+class HesaplamaDongusu(MotorHatasi, ValueError): ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,12 +219,47 @@ def _tablo_tanimi(
 
 def tablo_olusturma_sql(istek: TabloOlusturmaIstegi) -> str:
     tablo = adi_dogrula(istek.tablo, "tablo")
+    hesaplama_dongusunu_denetle(tablo, istek.sutunlar)
     return _tablo_tanimi(tablo, istek.sutunlar, istek.kisitlar, istek.secenekler)
 
 
 def sutun_ekleme_sql(istek: SutunEklemeIstegi) -> str:
     tablo = adi_dogrula(istek.tablo, "tablo")
+    hesaplama_dongusunu_denetle(tablo, (istek.sutun,))
     return f"ALTER TABLE {_tirnakla(tablo)} ADD COLUMN {_sutun_tanimi(istek.sutun)}"
+
+
+def hesaplama_dongusunu_denetle(tablo: str, sutunlar: Sequence[Sutun]) -> None:
+    # Hesaplanan sütunlar yalnız AS ifadeleriyle grafiğe girer; a → a ve a → b → a
+    # açık zincirle reddedilir. CHECK bu grafiğe katılmaz. Verilen tanım kendi
+    # başına denetlenir; farklı aşamaların tanımları birleştirilmez. Mevcut şemaya
+    # bakmak gerekmez: var olan bir sütun daha tanımlanmamış sütuna başvuramaz.
+    adlar = {s.ad.casefold(): s for s in sutunlar}
+    bagimlilik = {
+        ad: [b for b in sorted(hesaplama_bagimliliklari(s)) if b in adlar]
+        for ad, s in adlar.items()
+    }
+    durum: dict[str, str] = {}
+    yol: list[str] = []
+
+    def gez(ad: str) -> None:
+        durum[ad] = "yolda"
+        yol.append(ad)
+        for b in bagimlilik[ad]:
+            if durum.get(b) == "yolda":
+                zincir = [adlar[y].ad for y in yol[yol.index(b) :]] + [adlar[b].ad]
+                raise HesaplamaDongusu(
+                    f"{tablo}: hesaplama döngüsü, hesaplanan sütunlar birbirine "
+                    "dayanıyor: " + " → ".join(zincir)
+                )
+            if b not in durum:
+                gez(b)
+        yol.pop()
+        durum[ad] = "bitti"
+
+    for ad in adlar:
+        if ad not in durum:
+            gez(ad)
 
 
 def _kopyalama_sql(
@@ -238,6 +276,7 @@ def sutun_ozelligi_degistirme_sql(
     istek: SutunOzelligiDegistirmeIstegi,
 ) -> tuple[str, ...]:
     tablo = adi_dogrula(istek.tablo, "tablo")
+    hesaplama_dongusunu_denetle(tablo, istek.sutunlar)
     gecici = tablo + GECICI_AD_EKI
     adlar = tuple(adi_dogrula(s.ad, "sütun") for s in istek.sutunlar)
     sutunlar = tuple(
@@ -448,35 +487,14 @@ def paketi_sirala(paket: YapiPaketi) -> tuple[YapiIsi, ...]:
 
 
 def _hesaplama_dongusunu_reddet(isler: tuple[YapiIsi, ...]) -> None:
-    # Hesaplanan sütunlar birbirine dayanıyorsa sıra yoktur; sessizce kırmak
-    # yerine paket açık hatayla reddedilir (verilen sıra çözüm sayılmaz).
-    eklemeler = [is_ for is_ in isler if isinstance(is_, SutunEklemeIstegi)]
-    dayandigi = {
-        id(s): [d for d in eklemeler if d is not s and _once_gelir(d, s)]
-        for s in eklemeler
-    }
-    durum: dict[int, str] = {}
-    yol: list[SutunEklemeIstegi] = []
-
-    def gez(s: SutunEklemeIstegi) -> None:
-        durum[id(s)] = "yolda"
-        yol.append(s)
-        for d in dayandigi[id(s)]:
-            if durum.get(id(d)) == "yolda":
-                baslangic = next(i for i, y in enumerate(yol) if y is d)
-                zincir = [y.sutun.ad for y in yol[baslangic:]] + [d.sutun.ad]
-                raise GecersizPaket(
-                    f"{s.tablo}: hesaplanan sütunlar döngü oluşturuyor: "
-                    + " → ".join(zincir)
-                )
-            if id(d) not in durum:
-                gez(d)
-        yol.pop()
-        durum[id(s)] = "bitti"
-
-    for s in eklemeler:
-        if id(s) not in durum:
-            gez(s)
+    # Aynı tabloya eklenen sütunlar birlikte tek tanım gibi denetlenir; hesaplanan
+    # sütunlar birbirine dayanıyorsa sıra yoktur, paket açık hatayla reddedilir.
+    tablolar: dict[str, list[Sutun]] = {}
+    for is_ in isler:
+        if isinstance(is_, SutunEklemeIstegi):
+            tablolar.setdefault(is_.tablo, []).append(is_.sutun)
+    for tablo, sutunlar in tablolar.items():
+        hesaplama_dongusunu_denetle(tablo, sutunlar)
 
 
 def _once_gelir(a: YapiIsi, b: YapiIsi) -> bool:

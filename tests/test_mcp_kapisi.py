@@ -1189,3 +1189,25 @@ def test_satirlari_guncelle_araci_kosulla_gunceller_ve_anahtar_doner(
     gunluk_metni = (ayar.log_dizini / gunluk.GUNLUK_DOSYA_ADI).read_text("utf-8")
     assert "mcp_guncelleme | tablo=kisiler guncellenen=1" in gunluk_metni
     assert "Ali Veli" not in gunluk_metni
+
+
+def test_hesaplama_dongusu_arac_hatasi_olur_ve_istek_birakilmaz(
+    test_koku: Path,
+) -> None:
+    ayar = ay.ayarlari_yukle()
+    ay.dizinleri_hazirla(ayar)
+    gunluk.gunlugu_kur(ayar.log_dizini)
+    sunucu = mcp_kapisi.sunucu_kur(ayar)
+    hata = _hata(
+        sunucu,
+        mcp_kapisi.ARAC_TABLO_OLUSTURMA_ISTEGI,
+        {
+            "tablo": "t",
+            "sutunlar": [
+                {"ad": "a", "ozellikler": ["INTEGER", "AS (b + 1)"]},
+                {"ad": "b", "ozellikler": ["INTEGER", "AS (a + 1)"]},
+            ],
+        },
+    )
+    assert "hesaplama döngüsü" in hata and "a → b → a" in hata
+    assert _cagir(sunucu, mcp_kapisi.ARAC_BEKLEYEN_ISTEKLER, {}) == {"istekler": []}

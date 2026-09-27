@@ -343,7 +343,25 @@ Eskiden `(derived, base)` sırası "no such column: base" ile düşüyor,
 ters sıra geçiyordu; sıra Cowork'e kalıyordu. Testli: iki giriş sırası,
 zincir, tırnaklı ad, iç içe parantez, CASE ve işlev, metin sabiti ve işlev
 adından yanlış bağımlılık çıkmaması, gerçek döngünün reddi, gerçek
-veritabanında iki sırada uygulama. **Bilinen sınır** (teslim öncesi kırma
+veritabanında iki sırada uygulama.
+
+**Hesaplama döngüsü ön denetimi** (plan commit 2, dış inceleme 1f5e2b1
+madde 3). `hesaplama_dongusunu_denetle(tablo, sutunlar)` yalnız AS
+ifadelerinden grafik kurar; kendine dayanan (`a AS (a + 1)`) ve dolaylı
+(`a → b → a`) döngüler `HesaplamaDongusu` ile, sütun zinciri yazılarak
+reddedilir. CHECK bu grafiğe girmez (`k AS (kod*2), CHECK (k>0)` geçer).
+Denetim tablo kurma, sütun ekleme ve yeniden kurma tanımlarında ortaktır ve
+SQL üretiminde çalışır; istek bırakılırken de çağrıldığı için döngülü istek
+sistem tablosuna yazılmaz, DDL artığı kalmaz (testli: tekil ve paket yolu,
+boş ve dolu tablo, MCP). Paket içinde aynı tabloya eklenen sütunlar birlikte
+tek tanım gibi denetlenir; farklı aşamaların (yeniden kurma) tanımları
+birleştirilmez, her tanım kendi başına denetlenir. Mevcut şemaya bakmak
+gerekmez: var olan bir sütun daha tanımlanmamış sütuna başvuramaz, o yüzden
+mevcut ve yeni sütunlar arasında döngü oluşamaz. Eskiden SQLite `a AS (a+1)`
+eklemesini kabul ediyor, hatayı ilk satırda "generated column loop" diye
+veriyordu; onaydan geçen yapı kalıcı oluyordu.
+
+**Bilinen sınır** (teslim öncesi kırma
 turunda bulundu, karar bekliyor): hesaplanan sütun eklemesi, aynı paketteki
 **yeniden kurmanın** tanımladığı bir sütuna dayanıyorsa paket düşer, çünkü
 sütun ekleme kuralı gereği yeniden kurmadan önce gelir ("no such column").
@@ -351,10 +369,8 @@ sütun ekleme kuralı gereği yeniden kurmadan önce gelir ("no such column").
 bu bağı çözmüyor; çözmesi istenirse ayrı iş. İkinci sınır: kapsam kararı
 gereği yalnız hesaplanan sütun ifadesi okunur; `CHECK (d > base)` gibi bir
 kısıt da aynı pakette eklenen `base`'e dayanabilir ve SQLite bunu da "no such
-column" ile reddeder (betikle doğrulandı), sıralayıcı CHECK'i okumaz. Ayrıca
-SQLite kendine dayanan hesaplanan sütunu (`k AS (k * 2)`) eklemede kabul
-ediyor, hatayı satır yazılırken veriyor ("generated column loop");
-sıralayıcı bunu döngü saymaz, SQLite'a bırakır.
+column" ile reddeder (betikle doğrulandı), sıralayıcı CHECK'i okumaz (plan
+commit 3 ile kapanacak).
 
 Başvuru bir ayrıştırma değil taramadır: tek tırnaklı metin sabitleri
 çıkarıldıktan sonra `REFERENCES <ad>` (çıplak, `"..."`, `` `...` `` ya da

@@ -819,3 +819,45 @@ def test_bayat_onizlemede_denetim_hatasi_karar_yazmaz_onizleme_hatasi_verir(
         onay.onayla(veritabani, kimlik, gorulen_onizleme="bayat")
     monkeypatch.undo()
     assert onay.kayit_getir(veritabani, kimlik).durum is onay.Durum.BEKLIYOR
+
+
+# --- plan commit 2: hesaplama döngüsü istek yazılmadan reddedilir ------------------
+
+
+@pytest.mark.parametrize("dolu", [False, True], ids=["bos", "dolu"])
+def test_kendine_dayanan_hesaplama_onay_akisina_girmez(
+    veritabani: vt.Veritabani, dolu: bool
+) -> None:
+    _gorup_onayla(veritabani, onay.istek_birak(veritabani, KISILER))
+    if dolu:
+        with veritabani.islem() as oturum:
+            oturum.execute(text("INSERT INTO kisiler (ad_soyad) VALUES ('A')"))
+    a = m.SutunEklemeIstegi("kisiler", m.Sutun("a", ("INTEGER", "AS (a + 1)")))
+    with pytest.raises(m.HesaplamaDongusu, match="hesaplama döngüsü"):
+        onay.istek_birak(veritabani, m.YapiPaketi((a,)))
+    with pytest.raises(m.HesaplamaDongusu):
+        onay.istek_birak(veritabani, a)
+    assert onay.bekleyenler(veritabani) == ()
+    assert _sutun_turleri(veritabani, "kisiler") == {
+        "id": "INTEGER",
+        "ad_soyad": "TEXT",
+    }
+    with veritabani.islem() as oturum:
+        oturum.execute(text("INSERT INTO kisiler (ad_soyad) VALUES ('B')"))
+
+
+def test_tablo_tanimindaki_dongu_istek_birakilmadan_reddedilir(
+    veritabani: vt.Veritabani,
+) -> None:
+    istek = m.TabloOlusturmaIstegi(
+        "t",
+        (
+            m.Sutun("id", ("INTEGER", "PRIMARY KEY")),
+            m.Sutun("a", ("INTEGER", "AS (b+1)")),
+            m.Sutun("b", ("INTEGER", "AS(a+1)")),
+        ),
+    )
+    with pytest.raises(m.HesaplamaDongusu, match="a → b → a"):
+        onay.istek_birak(veritabani, istek)
+    assert onay.bekleyenler(veritabani) == ()
+    assert "t" not in _tablolar(veritabani)
