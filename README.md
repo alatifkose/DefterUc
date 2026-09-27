@@ -482,6 +482,60 @@ ve o türün tekil aracının aldığı alanlarla verilir (pydantic ayrımlı
 birlik). Sunucu talimatı Cowork'a bağlı işleri ayrı ayrı bırakmamasını,
 sıra düşünmemesini söyler.
 
+### Teslim kaydı — 2026-09-28: sütun bağımlılıkları ve paket sıralaması
+
+Başlangıç: temiz `yeniden-insa`, commit `1f5e2b1`; dış inceleme raporu
+`C:\dev\Defter\denetim\2026-09-27\siralama_kontrolu` (dört bulgu,
+`reproduce.py`). Denetimcinin beş commit'lik planı aynen uygulandı, dal
+`sutun-bagimliliklari`.
+
+* **Bulgu 4, yanlış bağımlılık → commit 1:** önce `CAST(id AS INTEGER)`,
+  `1e3`, `"abs"(id)` ifadeleri `integer`, `e3`, `abs` adlı sütunla "döngü"
+  sayılıyordu; şimdi `cekirdek/ifade.py` sözdizimsel okuyucusu sütun
+  başvurusunu sayı, metin, tür adı, işlev adı, COLLATE, anahtar sözcük ve
+  tablo niteleyicisinden ayırır. Kanıt: 26 başvuru örneği, tanım ayrımı,
+  okunamayan ifadenin açık hatası, beş senaryo gerçek veritabanında.
+* **Bulgu 3, kendine bağlı hesaplama → commit 2:** önce `a AS (a + 1)` onaydan
+  geçip ilk satırda "generated column loop" veriyordu; şimdi
+  `hesaplama_dongusunu_denetle` tablo kurma, sütun ekleme ve yeniden kurma
+  tanımlarında ortak çalışır, istek yazılmadan `HesaplamaDongusu` ile zinciri
+  yazar. Kanıt: tekil ve paket, boş ve dolu tablo, karşılıklı ve dolaylı
+  döngü, MCP aracı.
+* **Bulgu 2, CHECK sıralaması → commit 3:** önce `d CHECK (d > base)` verilen
+  sıraya göre düşüyordu; şimdi CHECK sütun önkoşuludur, iki giriş sırası aynı
+  sonucu verir. Birbirini bekleyen önkoşullar "işlem sıralaması çözümsüz"
+  diye reddedilir, hesaplama döngüsü denmez; aynı yapı tek CREATE'te kabul
+  edilir (`a=5 → b=6`). Kanıt: iki sıra gerçek veritabanında, çoklu CHECK,
+  metin/işlev/kendi sütunu, çözümsüz zincir, REFERENCES döngüsü serbest.
+* **Bulgu 1, yeniden kurma ile ekleme → commit 4:** önce ekleme hep önce
+  geliyor, tanım eklenen sütunu içermiyorsa `SutunlarUyusmuyor` oluyordu;
+  denetimcinin düzeltmesi: yeniden kurma yeni sütun sağlamaz, "hesaplanan
+  sütunu tanıma koy" çözüm değildi. Şimdi tanımda geçen ekleme önce
+  (tanımdaki sırayla), geçmeyen sonra; bağlantılı ön denetim aşamalı sütun
+  listesiyle eksik sütunu ve işi adıyla söyler; istek bırakılırken reddeder,
+  listede `-- UYGULANAMAZ` işaretler, onayda `UYGULANAMADI` yapar. Kanıt: çift
+  kural, çoklu ekleme, zincir ve iki yeniden kurma üç girişten, birleşik
+  paket, gerçek veritabanında iki yön, istek/liste/onay yolları.
+* **Commit 5, bütünlük:** yalnız test; gösterilen SQL çalışanla aynı, özet ve
+  koşu sırası tutarlı, her aşamada zorlanan hata yapı bırakmıyor. Kod
+  değişikliği gerekmedi.
+* **Kırma turları (üç tur):** 33 ifadede okuyucu SQLite'ın authorizer ile
+  bildirdiği sütunlarla birebir; dört paketin bütün dizilişleri (24, 5040, 6,
+  6) aynı sonuca ya da aynı hataya gidiyor; bekleyen paket dış değişiklikle
+  geçersizleşince listede işaretleniyor ve onay `UYGULANAMADI` oluyor. Bulgu
+  yok. Gözlem: birbirinden bağımsız iki ekleme (`b CHECK (b > a)` ile
+  `d AS (a * 2)`) giriş sırasını korur, bu yüzden tablodaki sütun sırası
+  girişe göre `a, b, d` ya da `a, d, b` olur; plan böyle istiyor ("bağımsız
+  işler için kararlı sıra, niyet tahmini yok").
+* **Denetimcinin `reproduce.py` betiği:** assert'leri eski hatalı davranışı
+  beklediği için düzeltilmiş kodda durur; assert'siz kopyada 11 senaryonun
+  hepsi yeni davranışı gösterdi (paket başarılı, döngü istek yazılmadan ret,
+  yanlış döngü yok, tek CREATE'teki karşılıklı döngü ret).
+* **Sınır:** sıralayıcı hâlâ veritabanına bakmaz (istek doğrulaması,
+  önizleme, özet ve uygulama aynı sırayı üretsin diye); şema yalnız bağlantılı
+  ön denetimde okunur. Şemada olmayan ve pakette kurulmayan tablo
+  denetlenmez, paket dışı bekleyen istek davranışı korunur.
+
 ### Teslim kaydı — 2026-09-27: yapı paketi
 
 Başlangıç: temiz `yeniden-insa`, yerel/uzak commit `de95d7a`.
