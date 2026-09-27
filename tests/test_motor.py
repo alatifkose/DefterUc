@@ -2170,3 +2170,65 @@ def test_yeniden_kurma_iceren_paket_denetimsiz_islemde_calisir_ve_denetim_geri_a
     assert "kartlar" in _tablolar(veritabani)
     with veritabani.islem() as oturum:
         assert oturum.execute(text("PRAGMA foreign_keys")).scalar_one() == 1
+
+
+# --- inceleme fe1059a B5: indeks silme her yeniden kurmadan önce gelir --------------
+
+Z = m.TabloOlusturmaIstegi(
+    "z", (m.Sutun("id", ("INTEGER", "PRIMARY KEY")), m.Sutun("v", ("TEXT",)))
+)
+UX = m.IndeksOlusturmaIstegi("ux", "z", ("v",), benzersiz=True)
+UX_SIL = m.IndeksSilmeIstegi("ux")
+Z_SAYIYA = m.SutunOzelligiDegistirmeIstegi(
+    "z",
+    (m.Sutun("id", ("INTEGER", "PRIMARY KEY")), m.Sutun("v", ("INTEGER",))),
+    deger_donusumu_izinli=("v",),
+)
+Z_SAYIYA_IZINSIZ = m.SutunOzelligiDegistirmeIstegi(
+    "z", (m.Sutun("id", ("INTEGER", "PRIMARY KEY")), m.Sutun("v", ("INTEGER",)))
+)
+
+
+def _z_hazirla(v: vt.Veritabani) -> None:
+    _uygula(v, Z)
+    _uygula(v, UX)
+    with v.islem() as oturum:
+        oturum.execute(text("INSERT INTO z (id, v) VALUES (1, '01'), (2, '1')"))
+
+
+def test_paket_sirasi_indeks_silme_her_yeniden_kurmadan_once_gelir() -> None:
+    assert _sira(Z_SAYIYA, UX_SIL) == (UX_SIL, Z_SAYIYA)
+    assert _sira(UX_SIL, Z_SAYIYA) == (UX_SIL, Z_SAYIYA)
+    bankalar_kurma = m.SutunOzelligiDegistirmeIstegi(
+        "bankalar",
+        (m.Sutun("id", ("INTEGER", "PRIMARY KEY")), m.Sutun("ad", ("TEXT",))),
+    )
+    # Silme ve tablo kurma birbirinden bağımsız: verilen sırayla, ikisi de
+    # yeniden kurmadan önce yazılır.
+    assert _sira(bankalar_kurma, UX_SIL, BANKALAR) == (UX_SIL, BANKALAR, bankalar_kurma)
+    assert _sira(bankalar_kurma, BANKALAR, UX_SIL) == (BANKALAR, UX_SIL, bankalar_kurma)
+
+
+@pytest.mark.parametrize(
+    "isler",
+    [(Z_SAYIYA, UX_SIL), (UX_SIL, Z_SAYIYA)],
+    ids=["donusum,silme", "silme,donusum"],
+)
+def test_indeks_silme_ve_donusum_paketi_iki_giris_sirasinda_ayni_sonucu_verir(
+    veritabani: vt.Veritabani, isler: tuple[m.YapiIsi, ...]
+) -> None:
+    _z_hazirla(veritabani)
+    _uygula(veritabani, m.YapiPaketi(isler))
+    assert _satirlar(veritabani, "SELECT id, v FROM z ORDER BY id") == [(1, 1), (2, 1)]
+    assert _indeksler(veritabani, "z") == []
+
+
+def test_paket_duserse_silinen_indeks_geri_gelir(veritabani: vt.Veritabani) -> None:
+    _z_hazirla(veritabani)
+    with pytest.raises(m.KopyaDegerDegisti):
+        _uygula(veritabani, m.YapiPaketi((UX_SIL, Z_SAYIYA_IZINSIZ)))
+    assert _indeksler(veritabani, "z") == [("ux", 1)]
+    assert _satirlar(veritabani, "SELECT id, v FROM z ORDER BY id") == [
+        (1, "01"),
+        (2, "1"),
+    ]

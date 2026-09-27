@@ -316,8 +316,17 @@ paketin kendi üyeleri arasında çözülür, veritabanına bakılmaz: tabloyu
 kuran iş o tabloya dokunan her işten (sütun ekleme, sütun özelliği
 değiştirme, indeks) ve o tabloya `REFERENCES` ile başvuran her işten önce
 gelir; sütun ekleme aynı tablonun yeniden kurulmasından ve indeksinden,
-yeniden kurma indeksinden, indeks silme aynı adlı indeks oluşturmadan önce
-gelir. Başvuru bir ayrıştırma değil taramadır: tek tırnaklı metin sabitleri
+yeniden kurma indeksinden, indeks silme aynı adlı indeks oluşturmadan **ve
+paketteki her yeniden kurmadan** önce gelir. Son kural dış inceleme fe1059a
+B5 ile geldi: yeniden kurma tablonun mevcut indekslerini geri kurar; silinecek
+benzersiz indeks henüz duruyorsa dönüştürülen değerler (`'01'` ve `'1'` →
+`1`, `1`) orada çakışır ve paket düşerdi, ters sırada verilince geçerdi.
+İndeksin hangi tabloya ait olduğuna bakılmaz: silmeyi öne almak her tablo
+için zararsızdır (yeniden kurma o indeksi artık geri kurmaz) ve şemaya
+bakmadan önizleme ile uygulama aynı sırayı üretir; silmeye giden başka
+öncelik oku olmadığı için döngü doğmaz. Testli: aynı iki iş iki giriş
+sırasında aynı sonucu verir; paket düşerse silinen indeks de geri gelir.
+Başvuru bir ayrıştırma değil taramadır: tek tırnaklı metin sabitleri
 çıkarıldıktan sonra `REFERENCES <ad>` (çıplak, `"..."`, `` `...` `` ya da
 `[...]`) aranır; başka bir şey okunmaz. Bunun dışında verilen sıra korunur:
 her iş verilen sırayla ele alınır, dayandığı işler önce yazılır (derinlik

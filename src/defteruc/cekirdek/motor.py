@@ -424,7 +424,9 @@ def _once_gelir(a: YapiIsi, b: YapiIsi) -> bool:
         case SutunOzelligiDegistirmeIstegi():
             return isinstance(b, IndeksOlusturmaIstegi) and b.tablo == a.tablo
         case IndeksSilmeIstegi():
-            return isinstance(b, IndeksOlusturmaIstegi) and b.indeks == a.indeks
+            return isinstance(b, SutunOzelligiDegistirmeIstegi) or (
+                isinstance(b, IndeksOlusturmaIstegi) and b.indeks == a.indeks
+            )
         case IndeksOlusturmaIstegi():
             return False
 
