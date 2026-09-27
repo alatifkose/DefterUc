@@ -343,7 +343,18 @@ Eskiden `(derived, base)` sırası "no such column: base" ile düşüyor,
 ters sıra geçiyordu; sıra Cowork'e kalıyordu. Testli: iki giriş sırası,
 zincir, tırnaklı ad, iç içe parantez, CASE ve işlev, metin sabiti ve işlev
 adından yanlış bağımlılık çıkmaması, gerçek döngünün reddi, gerçek
-veritabanında iki sırada uygulama.
+veritabanında iki sırada uygulama. **Bilinen sınır** (teslim öncesi kırma
+turunda bulundu, karar bekliyor): hesaplanan sütun eklemesi, aynı paketteki
+**yeniden kurmanın** tanımladığı bir sütuna dayanıyorsa paket düşer, çünkü
+sütun ekleme kuralı gereği yeniden kurmadan önce gelir ("no such column").
+Çözüm yolu: hesaplanan sütunu yeniden kurma tanımının içine koymak. Sıralayıcı
+bu bağı çözmüyor; çözmesi istenirse ayrı iş. İkinci sınır: kapsam kararı
+gereği yalnız hesaplanan sütun ifadesi okunur; `CHECK (d > base)` gibi bir
+kısıt da aynı pakette eklenen `base`'e dayanabilir ve SQLite bunu da "no such
+column" ile reddeder (betikle doğrulandı), sıralayıcı CHECK'i okumaz. Ayrıca
+SQLite kendine dayanan hesaplanan sütunu (`k AS (k * 2)`) eklemede kabul
+ediyor, hatayı satır yazılırken veriyor ("generated column loop");
+sıralayıcı bunu döngü saymaz, SQLite'a bırakır.
 
 Başvuru bir ayrıştırma değil taramadır: tek tırnaklı metin sabitleri
 çıkarıldıktan sonra `REFERENCES <ad>` (çıplak, `"..."`, `` `...` `` ya da

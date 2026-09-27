@@ -475,3 +475,25 @@ def test_yenileme_hatasi_dongu_yapmaz_ve_sonucun_dogrulanamadigini_soyler(
         f"| {pencere.OLAY_PENCERE_HATASI} | hata türü: builtins.RuntimeError"
         in _log(ayar)
     )
+
+
+def test_reddet_beklenmeyen_hatada_da_sinirdan_gecer(
+    pencere_: pencere.OnayPenceresi,
+    veritabani: vt.Veritabani,
+    ayar: ay.Ayarlar,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    onay.istek_birak(veritabani, KISILER)
+    pencere_.yenile()
+
+    def patlat(*_: object, **__: object) -> onay.YapiIstegiKaydi:
+        raise RuntimeError("kasıtlı")
+
+    monkeypatch.setattr(onay, "reddet", patlat)
+    pencere_.reddet_dugmesi.click()
+    assert "Beklenmeyen hata" in pencere_.mesaj.text()
+    assert (
+        f"| {pencere.OLAY_PENCERE_HATASI} | hata türü: builtins.RuntimeError"
+        in _log(ayar)
+    )
+    assert _liste(pencere_.bekleyenler)[0].startswith("[1] tablo_olusturma")
