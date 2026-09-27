@@ -13,6 +13,7 @@ from defteruc.cekirdek import motor as m
 from defteruc.cekirdek.veritabani import Veritabani
 
 SISTEM_TABLOSU = "_defteruc_yapi_istekleri"
+PAKET_TURU = "yapi_paketi"
 
 
 class Durum(StrEnum):
@@ -40,6 +41,7 @@ ISTEK_TURLERI: dict[str, type[m.YapiIstegi]] = {
     "sutun_ozelligi_degistirme": m.SutunOzelligiDegistirmeIstegi,
     "indeks_olusturma": m.IndeksOlusturmaIstegi,
     "indeks_silme": m.IndeksSilmeIstegi,
+    PAKET_TURU: m.YapiPaketi,
 }
 
 
@@ -154,7 +156,6 @@ def kayit_getir(veritabani: Veritabani, kimlik: int) -> YapiIstegiKaydi:
 
 
 def onizleme_kodu(kayit: YapiIstegiKaydi) -> str:
-    """Gösterilen SQL'i ve isteği bağlar; yetkilendirme anahtarı değildir."""
     metin = json.dumps(
         [kayit.kimlik, kayit.tur, istek_json(kayit.istek), kayit.sql],
         ensure_ascii=False,
@@ -240,19 +241,47 @@ def _karari_yaz(
 
 
 def istek_aciklamasi(kayit: YapiIstegiKaydi) -> str:
-    istek = kayit.istek
+    return _aciklama(kayit.istek)
+
+
+def _aciklama(istek: m.YapiIstegi) -> str:
+    if isinstance(istek, m.YapiPaketi):
+        return " ".join(a for a in (_aciklama(is_) for is_ in istek.isler) if a)
     if (
         isinstance(istek, m.SutunOzelligiDegistirmeIstegi)
         and istek.deger_donusumu_izinli
     ):
         sutunlar = ", ".join(istek.deger_donusumu_izinli)
         return (
-            f"Değer dönüşümüne izin verilen sütunlar: {sutunlar}. Bu sütunlarda "
-            "kopyalanan değerin ve saklama sınıfının aynı kaldığı denetlenmez; tür "
-            "değişimiyle gelen hassasiyet kaybı geri alınmaz. Diğer sütunlar ve "
-            "kimlik her zaman aynen korunur."
+            f"{istek.tablo}: değer dönüşümüne izin verilen sütunlar: {sutunlar}. Bu "
+            "sütunlarda kopyalanan değerin ve saklama sınıfının aynı kaldığı "
+            "denetlenmez; tür değişimiyle gelen hassasiyet kaybı geri alınmaz. Diğer "
+            "sütunlar ve kimlik her zaman aynen korunur."
         )
     return ""
+
+
+def istek_ozeti(kayit: YapiIstegiKaydi) -> str:
+    istek = kayit.istek
+    if not isinstance(istek, m.YapiPaketi):
+        return ""
+    sirali = m.paketi_sirala(istek)
+    adimlar = " ".join(f"{n}) {is_ozeti(is_)}" for n, is_ in enumerate(sirali, 1))
+    return (
+        f"Yapı paketi: {len(sirali)} iş tek onayla tek işlemde uygulanır; biri "
+        f"düşerse hiçbiri kalmaz. Uygulanma sırası: {adimlar}"
+    )
+
+
+def is_ozeti(is_: m.YapiIsi) -> str:
+    match is_:
+        case m.SutunEklemeIstegi():
+            hedef = f"{is_.tablo}.{is_.sutun.ad}"
+        case m.IndeksOlusturmaIstegi() | m.IndeksSilmeIstegi():
+            hedef = is_.indeks
+        case _:
+            hedef = is_.tablo
+    return f"{istek_turu(is_)} {hedef}"
 
 
 def _simdi() -> str:
@@ -284,13 +313,31 @@ def istek_turu(istek: m.YapiIstegi) -> str:
 
 
 def istek_json(istek: m.YapiIstegi) -> str:
-    return json.dumps(asdict(istek), ensure_ascii=False)
+    return json.dumps(_istek_verisi(istek), ensure_ascii=False)
+
+
+def _istek_verisi(istek: m.YapiIstegi) -> dict[str, Any]:
+    if isinstance(istek, m.YapiPaketi):
+        return {
+            "isler": [
+                {"tur": istek_turu(is_), "istek": asdict(is_)} for is_ in istek.isler
+            ]
+        }
+    return asdict(istek)
 
 
 def istek_coz(tur: str, metin: str) -> m.YapiIstegi:
     if tur not in ISTEK_TURLERI:
         raise ValueError(f"bilinmeyen istek türü: {tur!r}")
     veri: dict[str, Any] = json.loads(metin)
+    if tur == PAKET_TURU:
+        return m.YapiPaketi(
+            tuple(_is_coz(str(uye["tur"]), uye["istek"]) for uye in veri["isler"])
+        )
+    return _is_coz(tur, veri)
+
+
+def _is_coz(tur: str, veri: dict[str, Any]) -> m.YapiIsi:
     match tur:
         case "tablo_olusturma":
             return m.TabloOlusturmaIstegi(
@@ -319,8 +366,10 @@ def istek_coz(tur: str, metin: str) -> m.YapiIstegi:
                 benzersiz=bool(veri["benzersiz"]),
                 kosul=str(veri["kosul"]),
             )
-        case _:
+        case "indeks_silme":
             return m.IndeksSilmeIstegi(indeks=str(veri["indeks"]))
+        case _:
+            raise ValueError(f"paket üyesi olamaz: {tur!r}")
 
 
 def _metinler(veri: Any) -> tuple[str, ...]:

@@ -99,7 +99,7 @@ def test_sistem_durumu_yol_ve_ortam_degiskeni_icermez(test_koku: Path) -> None:
     assert "DEFTERUC_" not in metin
 
 
-def test_sunucu_yalniz_sistem_durumu_aracini_sunar(test_koku: Path) -> None:
+def test_sunucu_arac_listesini_ve_sistem_durumu_semasini_sunar(test_koku: Path) -> None:
     sunucu = mcp_kapisi.sunucu_kur(ay.ayarlari_yukle())
 
     araclar = anyio.run(sunucu.list_tools)
@@ -873,3 +873,104 @@ def test_bekleyen_istekler_sonradan_olusan_tablonun_onizlemesini_yeniler(
         sunucu, mcp_kapisi.ARAC_ISTEK_DURUMU, {"talep_kimligi": eski["talep_kimligi"]}
     )
     assert durum["sql"] == bekleyen["sql"] and durum["durum"] == "BEKLIYOR"
+
+
+# --- yapı paketi: bağlı işler tek istek, tek talep kimliği, tek onay ---------------
+
+PAKET_ARGUMANLARI: dict[str, Any] = {
+    "isler": [
+        {
+            "tur": "tablo_olusturma",
+            "tablo": "banka_hesaplari",
+            "sutunlar": [
+                {"ad": "id", "ozellikler": ["INTEGER", "PRIMARY KEY"]},
+                {
+                    "ad": "banka_id",
+                    "ozellikler": ["INTEGER", "NOT NULL", "REFERENCES bankalar(id)"],
+                },
+            ],
+        },
+        {
+            "tur": "indeks_olusturma",
+            "indeks": "ix_hesap_banka",
+            "tablo": "banka_hesaplari",
+            "sutunlar": ["banka_id"],
+        },
+        {
+            "tur": "tablo_olusturma",
+            "tablo": "bankalar",
+            "sutunlar": [
+                {"ad": "id", "ozellikler": ["INTEGER", "PRIMARY KEY"]},
+                {"ad": "ad", "ozellikler": ["TEXT", "NOT NULL", "UNIQUE"]},
+            ],
+            "secenekler": ["STRICT"],
+        },
+    ]
+}
+
+
+def test_yapi_paketi_tek_talep_tek_onay_sirayi_sistem_belirler(test_koku: Path) -> None:
+    ayar = ay.ayarlari_yukle()
+    ay.dizinleri_hazirla(ayar)
+    gunluk.gunlugu_kur(ayar.log_dizini)
+    sunucu = mcp_kapisi.sunucu_kur(ayar)
+    assert mcp_kapisi.ARAC_YAPI_PAKETI_ISTEGI in mcp_kapisi.ARACLAR
+
+    yanit = _cagir(sunucu, mcp_kapisi.ARAC_YAPI_PAKETI_ISTEGI, PAKET_ARGUMANLARI)
+    assert yanit["talep_kimligi"] == 1
+    assert yanit["tur"] == "yapi_paketi"
+    assert yanit["durum"] == "BEKLIYOR"
+    sql = str(yanit["sql"])
+    assert (
+        sql.index('CREATE TABLE "bankalar"')
+        < sql.index('CREATE TABLE "banka_hesaplari"')
+        < sql.index('CREATE INDEX "ix_hesap_banka"')
+    )
+    assert [i["tur"] for i in yanit["istek"]["isler"]] == [
+        "tablo_olusturma",
+        "indeks_olusturma",
+        "tablo_olusturma",
+    ]
+    assert "1) tablo_olusturma bankalar" in str(yanit["ozet"])
+    bekleyen = _cagir(sunucu, mcp_kapisi.ARAC_BEKLEYEN_ISTEKLER, {})
+    assert [i["talep_kimligi"] for i in bekleyen["istekler"]] == [1]
+    assert _cagir(sunucu, mcp_kapisi.ARAC_YAPIYI_OKU, {}) == {"tablolar": []}
+
+    onaylayan = vt.Veritabani(ayar.veritabani_yolu)
+    try:
+        gorulen = onay.kayit_getir(onaylayan, 1)
+        kayit = onay.onayla(onaylayan, 1, gorulen_onizleme=onay.onizleme_kodu(gorulen))
+        assert kayit.durum is onay.Durum.UYGULANDI, kayit.sonuc
+    finally:
+        onaylayan.kapat()
+
+    tablolar = _cagir(sunucu, mcp_kapisi.ARAC_YAPIYI_OKU, {})["tablolar"]
+    assert [t["ad"] for t in tablolar] == ["banka_hesaplari", "bankalar"]
+    assert [i["ad"] for i in tablolar[0]["indeksler"]] == ["ix_hesap_banka"]
+    yazilan = _cagir(
+        sunucu,
+        mcp_kapisi.ARAC_SATIR_EKLE,
+        {"tablo": "bankalar", "satirlar": [{"ad": "Garanti"}]},
+    )
+    assert yazilan["anahtarlar"] == [[1]]
+    assert "FOREIGN KEY" in _hata(
+        sunucu,
+        mcp_kapisi.ARAC_SATIR_EKLE,
+        {"tablo": "banka_hesaplari", "satirlar": [{"banka_id": 7}]},
+    )
+
+
+def test_yapi_paketi_bos_ya_da_gecersiz_uyeyle_arac_hatasi_olur(
+    test_koku: Path,
+) -> None:
+    ayar = ay.ayarlari_yukle()
+    ay.dizinleri_hazirla(ayar)
+    gunluk.gunlugu_kur(ayar.log_dizini)
+    sunucu = mcp_kapisi.sunucu_kur(ayar)
+    assert "boş" in _hata(sunucu, mcp_kapisi.ARAC_YAPI_PAKETI_ISTEGI, {"isler": []})
+    assert "sade" in _hata(
+        sunucu,
+        mcp_kapisi.ARAC_YAPI_PAKETI_ISTEGI,
+        {"isler": [{"tur": "indeks_silme", "indeks": "Şema"}]},
+    )
+    assert _cagir(sunucu, mcp_kapisi.ARAC_BEKLEYEN_ISTEKLER, {}) == {"istekler": []}

@@ -347,3 +347,46 @@ def test_bayat_onizlemeyle_onay_uygulanmaz_pencere_yeni_metni_gosterir(
     assert _log(ayar).count(f"talep={kimlik} ") == 1
     with veritabani.islem() as oturum:
         assert oturum.execute(text("SELECT rowid, deger FROM kuyruk")).all() == [(7, 3)]
+
+
+# --- yapı paketi pencerede ------------------------------------------------------------
+
+
+def test_paket_pencerede_tek_istek_olarak_gorunur_ve_tek_tikla_uygulanir(
+    pencere_: pencere.OnayPenceresi, veritabani: vt.Veritabani
+) -> None:
+    paket = m.YapiPaketi(
+        (
+            m.TabloOlusturmaIstegi(
+                "kartlar",
+                (
+                    m.Sutun("id", ("INTEGER", "PRIMARY KEY")),
+                    m.Sutun("banka_id", ("INTEGER", "REFERENCES bankalar(id)")),
+                ),
+            ),
+            m.TabloOlusturmaIstegi(
+                "bankalar",
+                (m.Sutun("id", ("INTEGER", "PRIMARY KEY")), m.Sutun("ad", ("TEXT",))),
+            ),
+        )
+    )
+    kimlik = onay.istek_birak(veritabani, paket)
+    pencere_.yenile()
+    assert pencere_.bekleyenler.count() == 1
+    assert pencere_.bekleyenler.item(0).text().startswith(f"[{kimlik}] yapi_paketi")
+    sql = pencere_.sql.toPlainText()
+    assert sql.index('CREATE TABLE "bankalar"') < sql.index('CREATE TABLE "kartlar"')
+    assert "1) tablo_olusturma bankalar" in pencere_.aciklama.text()
+    pencere_.onayla_dugmesi.click()
+    assert (
+        f"Talep {kimlik} onaylandı ve uygulandı (yapi_paketi)." in pencere_.mesaj.text()
+    )
+    assert pencere_.bekleyenler.count() == 0
+    with veritabani.islem() as oturum:
+        adlar = {
+            str(s[0])
+            for s in oturum.execute(
+                text("SELECT name FROM sqlite_master WHERE type = 'table'")
+            ).all()
+        }
+    assert {"bankalar", "kartlar"} <= adlar

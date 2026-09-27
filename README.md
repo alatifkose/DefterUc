@@ -43,7 +43,7 @@ Git geçmişinde durur (son hâli `e77a222`). Kalanlar:
 * Test altyapısı (pytest + Hypothesis) ve tek komutluk kalite kontrolü (Ruff,
   Pyright strict, pytest)
 * `.gitignore` / `.gitattributes`; kritik dışlama kuralları testle doğrulanır
-* MCP kapısı: `uv run defteruc-mcp`, tek araç `sistem_durumu`
+* MCP kapısı: `uv run defteruc-mcp` (araçlar "MCP kapısı" bölümünde)
 * Veritabanı altyapısı (`cekirdek/veritabani.py`): bağlantı politikası ve
   işlem sınırı; tablo içermez
 * Arşiv (`cekirdek/arsiv.py`): gelen dizini sınırı, akışla SHA-256, içerik
@@ -189,8 +189,15 @@ Git geçmişinde durur (son hâli `e77a222`). Kalanlar:
   `defteruc reddet <kimlik>`.
   Ayrıntı "Başlatma" bölümünde.
 
-* **MCP araçları** (`mcp_kapisi.py`, 2026-09-25): beş yapı isteği aracı,
-  `istek_durumu`, `bekleyen_istekler`, `yapiyi_oku`, `satir_ekle`. Ayrıntı
+* **Yapı paketi** (2026-09-27, karar: Abdüllatif): birbirine bağlı yapı
+  işleri (bankalar ve ona bağlı kartlar, yeni tablo ve indeksi) tek yapı
+  isteği olarak bırakılır: tek talep kimliği, tek onay, tek transaction;
+  biri düşerse hiçbiri kalmaz. Uygulanma sırasını motor belirler, Cowork
+  sıra düşünmez. Ayrıntı "Yapı paketi" bölümünde.
+
+* **MCP araçları** (`mcp_kapisi.py`, 2026-09-25): altı yapı isteği aracı
+  (beş tekil iş ve `yapi_paketi_istegi`), `istek_durumu`,
+  `bekleyen_istekler`, `yapiyi_oku`, `satir_ekle`, `satirlari_oku`. Ayrıntı
   "MCP kapısı" bölümünde.
 * **Yapıyı okuma** (`cekirdek/yapi.py`) ve **satır ekleme = kayıt**
   (`cekirdek/kayit.py`, onaysız, tek transaction, eklenen her satırın
@@ -277,6 +284,88 @@ ve isteği açmadan önce doğrular; `uygula_baglantida(baglanti, istek)` işi o
 bağlantıda yapar; `istek_sql(istek)` çalışacak cümleyi üretir. Yapıya
 dokunan tek üretim çağıranı onay modülüdür; motor testleri de aynı iki
 çağrıyla çalışır.
+
+## Yapı paketi
+
+Karar (2026-09-27, Abdüllatif). Bir belge çoğu zaman birbirine bağlı
+birden fazla yapı işi doğurur: bir kart fişi harcama, kart ve banka
+tablolarını birlikte ister; kartlar bankalara `REFERENCES` ile bağlıdır.
+Bunlar ayrı isteklerle bırakılınca doğru onay sırası kullanıcıya kalıyordu
+(25 Eylül gecesi gerçek veritabanında bankalar ve banka_hesaplari böyle
+bekledi); kabul edilmedi. Sözlükteki tanım: yapı paketi, birbirine bağlı
+yapı işlerinin tek yapı isteği olarak bırakılmış hâlidir; tek talep
+kimliği, tek onay, tek işlem; sırayı sistem belirler.
+
+**Motorda** (`cekirdek/motor.py`, `YapiPaketi(isler)`): paket altıncı istek
+türüdür, üyeleri beş tekil iştir (`YapiIsi`); paket paket içeremez (tip ve
+JSON çözümü reddeder). Boş paket ve aynı tabloyu iki kez kuran paket
+`GecersizPaket` ile daha kayıt yazılmadan reddedilir; her üye tek başına
+geçerli olmalıdır (ad ve parça kuralı). **Sıra** (`paketi_sirala`) yalnız
+paketin kendi üyeleri arasında çözülür, veritabanına bakılmaz: tabloyu
+kuran iş o tabloya dokunan her işten (sütun ekleme, sütun özelliği
+değiştirme, indeks) ve o tabloya `REFERENCES` ile başvuran her işten önce
+gelir; sütun ekleme aynı tablonun yeniden kurulmasından ve indeksinden,
+yeniden kurma indeksinden, indeks silme aynı adlı indeks oluşturmadan önce
+gelir. Başvuru bir ayrıştırma değil taramadır: tek tırnaklı metin sabitleri
+çıkarıldıktan sonra `REFERENCES <ad>` (çıplak, `"..."`, `` `...` `` ya da
+`[...]`) aranır; başka bir şey okunmaz. Bunun dışında verilen sıra korunur:
+her iş verilen sırayla ele alınır, dayandığı işler önce yazılır (derinlik
+öncelikli). Karşılıklı başvuru döngüsünde başvurulan taraf öne alınır;
+SQLite tablo kurulurken hedef tablonun varlığını istemez, sıra yalnız
+okunabilirlik içindir (betikle doğrulandı: `REFERENCES` hedefi olmayan
+`CREATE TABLE` kabul edilir, hata satır yazılırken çıkar). Paketin SQL'i
+sıralı üyelerin cümleleridir (`;` ve satır sonuyla ayrılmış).
+
+**Uygulama** tek transaction'dadır: paket bir yeniden kurma taşıyorsa bütün
+paket yabancı anahtar denetimsiz transaction'da çalışır ve commit öncesi
+`PRAGMA foreign_key_check` yapılır, taşımıyorsa normal transaction'dadır;
+üyeler sırayla `uygula_baglantida` ile yapılır, herhangi biri düşerse
+hepsi geri alınır ve talep `UYGULANAMADI` olur (testli: bozuk indeks
+üyesi olan paket hiçbir tablo bırakmaz).
+
+**Önizleme** (`_paket_onizlemesi`): sonraki üyenin önizlemesi öncekilerin
+kurduğu yapıya göre üretilsin diye yeniden kurma dışındaki üyeler bir
+SAVEPOINT içinde uygulanıp geri alınır; paketin kurduğu tablonun yeniden
+kurma önizlemesi böylece gerçek kopya cümleleriyle çıkar. Yeniden kurma
+üyesi önizlemede uygulanmaz: yabancı anahtar denetimi açıkken ebeveyn
+tablonun `DROP`'u düşer (betikle doğrulandı), denetim kapalıyken düşmez;
+uygulansaydı bekleyenlerde (denetim açık) ve onayda (denetim kapalı) farklı
+metin çıkar, onay hiç verilemezdi. Bekleyenler her okunduğunda önizleme
+yeniden üretilir (`yeniden_kurma_gerekir(paket)` = üyelerden biri
+gerektiriyorsa) ve onayda görülen kodla karşılaştırılır; tekil istekle aynı
+kural. Test, paket önizlemesinin bekleyenlerde iki okumada ve onayda aynı
+kaldığını ve her cümlenin birebir çalıştığını doğrular.
+
+**Kayıt ve arayüz.** Sistem tablosunda `tur = 'yapi_paketi'`, `istek`
+sütununda üyeler kendi türleriyle (`{"isler": [{"tur": ..., "istek":
+...}]}`); şema değişmedi, göç gerekmez. `onay.istek_ozeti` paketin
+uygulanma sırasını yazar ("1) tablo_olusturma bankalar 2) ..."), komut
+satırı SQL'in altında, pencere SQL kutusunun altında gösterir; MCP yanıtında
+`ozet` alanıdır. Üyelerin uyarıları (`deger_donusumu_izinli`) tablo adıyla
+birleştirilir. MCP aracı `yapi_paketi_istegi(isler)`: her üye `tur` alanı
+ve o türün tekil aracının aldığı alanlarla verilir (pydantic ayrımlı
+birlik). Sunucu talimatı Cowork'a bağlı işleri ayrı ayrı bırakmamasını,
+sıra düşünmemesini söyler.
+
+### Teslim kaydı — 2026-09-27: yapı paketi
+
+Başlangıç: temiz `yeniden-insa`, yerel/uzak commit `de95d7a`.
+
+* **Kanıt:** 23 yeni test önce düştü (paket türü yoktu), sonra geçti:
+  sıralama (başvuru, dokunma, indeks silme, bağımsız işler, tırnaklı ve
+  metin içindeki başvuru, döngü), tek işlem ve geri alma, denetimsiz
+  transaction ve denetimin geri açılması, JSON gidiş dönüş ve iç içe paket
+  reddi, önizleme tutarlılığı, MCP aracı (ters sırada verilen bankalar ve
+  banka_hesaplari tek talep, tek onay, yabancı anahtar denetimi), komut
+  satırı ve pencere.
+* **Yanında:** README'de eskimiş iki cümle düzeltildi ("tek araç
+  `sistem_durumu`", "çekirdek yalnız `veritabani.py` ve `arsiv.py`"),
+  `onay.onizleme_kodu` içindeki docstring kaldırıldı, MCP araç listesi
+  testinin eskimiş adı düzeltildi.
+* **Sınır:** sıra yalnız paket içindeki işler arasında çözülür; paketin
+  dışındaki bekleyen isteklerle sıra ilişkisi kurulmaz. Pencerede dayandığı
+  tablo olmayan tekil isteğin düğmesini kapatma yapılmadı; paket bu ihtiyacı
+  kaynağında kaldırır.
 
 ## Onay penceresi
 
@@ -640,10 +729,10 @@ olmayan kavramlar yakalanmaz, bunlar kod incelemesinin konusudur. Gerçek
 semantik sızıntı (adsız finansal varsayım: sabit ölçek, sabit formül)
 sonraki aşamalarda ayrıca denetlenir.
 
-Aşama 4.0'da iki paket de boş açıldı. 2026-09-24'ten beri `cekirdek/`
-`veritabani.py` ve `arsiv.py` modüllerini içerir; `finans/` boştur
-(`__init__.py` boş). Dinamik tablo yönünde finans
-paketinin yeri henüz konuşulmadı.
+Aşama 4.0'da iki paket de boş açıldı. Bugün `cekirdek/` "Dizin düzeni"
+bölümündeki yedi modülü içerir (veritabanı, motor, onay, yapı, kayıt,
+okuma, arşiv); `finans/` boştur (`__init__.py` boş). Dinamik tablo yönünde
+finans paketinin yeri henüz konuşulmadı.
 
 ## Bilinen teknik borç
 
@@ -728,8 +817,10 @@ uv run defteruc bekleyenler
 
 Bekleyen yapı isteklerini talep kimliği, tür, bırakılma zamanı (yerel saat)
 ve **çalışacak SQL cümlesiyle** listeler. Onaylanan şey bu cümledir, bir
-özet değil. Her SQL'in altında o önizlemeye ait kodu içeren hazır onay
-komutu gösterilir. Bekleyen yoksa tek satır söyler.
+özet değil. Yapı paketinde SQL'in altında uygulanma sırası da yazılır
+("1) tablo_olusturma bankalar 2) ..."). Her SQL'in altında o önizlemeye
+ait kodu içeren hazır onay komutu gösterilir. Bekleyen yoksa tek satır
+söyler.
 
 ```bash
 uv run defteruc onayla 3 --onizleme <bekleyenler-ciktisindaki-kod>
@@ -792,6 +883,7 @@ Araçlar (2026-09-25; adları `ARACLAR`):
 | `sutun_ekleme_istegi` | Mevcut tabloya sütun için yapı isteği bırakır. | bekler |
 | `sutun_ozelligi_degistirme_istegi` | Tablonun tam yeni tanımıyla sütun özelliği değiştirme isteği bırakır (motorun emniyet kuralları geçerli). | bekler |
 | `indeks_olusturma_istegi` / `indeks_silme_istegi` | İndeks için yapı isteği bırakır. | bekler |
+| `yapi_paketi_istegi` | Birbirine bağlı yapı işlerini tek yapı isteği (yapı paketi) olarak bırakır: `isler` listesi, her üye `tur` alanıyla; tek talep kimliği, tek onay, tek işlem; sırayı sistem belirler. Yanıtta `ozet` uygulanma sırasıdır. | bekler |
 | `istek_durumu` | Talep kimliğiyle durum: `BEKLIYOR`, `UYGULANDI`, `REDDEDILDI`, `UYGULANAMADI` (+ sebep). | - |
 | `bekleyen_istekler` | Kullanıcının kararını bekleyen istekler. | - |
 | `yapiyi_oku` | Tablolar: ad, `CREATE TABLE` cümlesi, sütunlar (`table_xinfo`), indeksler (benzersizlik `PRAGMA index_list`'ten, SQL metninden değil), satır sayısı. Sistem tabloları (`_defteruc_*`) ve `sqlite_*` listede yoktur; önek karşılaştırmasında alt çizgi kaçırılır, `sqliteverileri` gibi kullanıcı tabloları görünür (dış inceleme 7dba285 bulgu 5 ve 6). | - |
@@ -1032,7 +1124,7 @@ src/defteruc/    uygulama paketi
   mcp_kapisi.py   uv run defteruc-mcp; MCP sunucusu ve araçları
   cekirdek/       genel çekirdek; finansı tanımaz
     veritabani.py   SQLite bağlantı politikası, işlem sınırı
-    motor.py        yapı işleri: tablo, sütun, sütun özelliği, indeks; ham SQL
+    motor.py        yapı işleri: tablo, sütun, sütun özelliği, indeks, yapı paketi (sıra); ham SQL
     onay.py         yapı istekleri: sistem tablosu, bekleyenler, onay ve ret
     yapi.py         mevcut yapıyı okuma (tablolar, sütunlar, indeksler, satır sayısı)
     kayit.py        satır ekleme (kayıt): onaysız, tek transaction, anahtar döner

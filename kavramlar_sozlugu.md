@@ -38,6 +38,12 @@ Talep kimliği, bir yapı isteğine bırakıldığı anda verilen ve o isteği h
 
 _(Abdüllatif'in onayıyla eklendi, 2026-09-25.)_
 
+### Yapı paketi
+
+Yapı paketi, birbirine bağlı birden fazla yapı işinin (örneğin bankalar tablosu ile ona bağlı kartlar tablosu, ya da yeni bir tablo ile indeksi) tek yapı isteği olarak bırakılmış hâlidir. Paketin tek talep kimliği vardır, tek onayla ve tek işlemde uygulanır: işlerin hepsi birlikte uygulanır ya da hiçbiri uygulanmaz. İşlerin uygulanma sırasını Cowork değil sistem belirler. Bir belgeden birbirine bağlı işler çıkıyorsa Cowork onları ayrı istekler olarak değil yapı paketi olarak bırakır.
+
+_(Abdüllatif'in onayıyla eklendi, 2026-09-27.)_
+
 ### Sistem tablosu
 
 Sistem tablosu, uygulamanın kendi işini yürütmek için tuttuğu tablodur; ilk örneği yapı isteklerinin tutulduğu tablodur. Nesne değildir, kullanıcı verisi taşımaz, Cowork tarafından açılmaz ve motorla değiştirilemez (adı motorun ad kuralına bilerek uymaz). "Hazır kalıp tablo yok" kuralı nesneler içindir; sistem tablosu bu kuralın dışındadır.

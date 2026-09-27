@@ -42,6 +42,8 @@ def bekleyenleri_goster(ayarlar: Ayarlar) -> int:
         _yaz("")
         _yaz(f"[{kayit.kimlik}] {kayit.tur} · bırakıldı {yerel_zaman(kayit.olusturma)}")
         _yaz(kayit.sql)
+        if ozet := onay.istek_ozeti(kayit):
+            _yaz(ozet)
         if aciklama := onay.istek_aciklamasi(kayit):
             _yaz(f"DİKKAT: {aciklama}")
         _yaz(

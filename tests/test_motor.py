@@ -2007,3 +2007,166 @@ def test_kendi_adini_cevir_tek_tirnakli_tanimlayiciyi_cevirir_metni_korur(
     assert m._kendi_adini_cevir(parca, "qc", "qc__yk") == beklenen  # pyright: ignore[reportPrivateUsage]
     sade = m._kendi_adini_cevir(parca, "qc", "qc", sade=True)  # pyright: ignore[reportPrivateUsage]
     assert sade == beklenen.replace('"qc__yk"', "qc")
+
+
+# --- yapı paketi: bağlı işler tek istek, sırayı sistem belirler --------------------
+
+BANKALAR = m.TabloOlusturmaIstegi(
+    "bankalar",
+    (m.Sutun("id", ("INTEGER", "PRIMARY KEY")), m.Sutun("ad", ("TEXT", "NOT NULL"))),
+)
+KARTLAR = m.TabloOlusturmaIstegi(
+    "kartlar",
+    (
+        m.Sutun("id", ("INTEGER", "PRIMARY KEY")),
+        m.Sutun("banka_id", ("INTEGER", "NOT NULL", "REFERENCES bankalar(id)")),
+        m.Sutun("son_dort", ("TEXT",)),
+    ),
+)
+HARCAMALAR = m.TabloOlusturmaIstegi(
+    "harcamalar",
+    (
+        m.Sutun("id", ("INTEGER", "PRIMARY KEY")),
+        m.Sutun("kart_id", ("INTEGER",)),
+        m.Sutun("tutar", ("REAL",)),
+    ),
+    kisitlar=('FOREIGN KEY (kart_id) REFERENCES "kartlar" (id)',),
+)
+IX_KARTLAR = m.IndeksOlusturmaIstegi("ix_kartlar_banka", "kartlar", ("banka_id",))
+
+
+def _sira(*isler: m.YapiIsi) -> tuple[m.YapiIsi, ...]:
+    return m.paketi_sirala(m.YapiPaketi(isler))
+
+
+def test_paket_sirasi_basvurulan_tablo_once_gelir() -> None:
+    assert _sira(HARCAMALAR, IX_KARTLAR, KARTLAR, BANKALAR) == (
+        BANKALAR,
+        KARTLAR,
+        HARCAMALAR,
+        IX_KARTLAR,
+    )
+
+
+def test_paket_sirasi_tabloyu_kuran_is_ona_dokunan_islerden_once_gelir() -> None:
+    ekleme = m.SutunEklemeIstegi("bankalar", m.Sutun("kisa_ad", ("TEXT",)))
+    degistirme = m.SutunOzelligiDegistirmeIstegi(
+        "bankalar",
+        (
+            m.Sutun("id", ("INTEGER", "PRIMARY KEY")),
+            m.Sutun("ad", ("TEXT", "NOT NULL")),
+            m.Sutun("kisa_ad", ("TEXT", "DEFAULT ''")),
+        ),
+    )
+    indeks = m.IndeksOlusturmaIstegi("ix_bankalar_kisa", "bankalar", ("kisa_ad",))
+    assert _sira(indeks, degistirme, ekleme, BANKALAR) == (
+        BANKALAR,
+        ekleme,
+        degistirme,
+        indeks,
+    )
+
+
+def test_paket_sirasi_indeks_silme_ayni_adli_olusturmadan_once_gelir() -> None:
+    silme = m.IndeksSilmeIstegi("ix_kartlar_banka")
+    assert _sira(IX_KARTLAR, silme, KARTLAR) == (silme, KARTLAR, IX_KARTLAR)
+
+
+def test_paket_sirasi_bagimsiz_isler_verilen_sirayi_korur() -> None:
+    kisiler = m.TabloOlusturmaIstegi("kisiler", (m.Sutun("id", ("INTEGER",)),))
+    assert _sira(KARTLAR, kisiler, BANKALAR) == (BANKALAR, KARTLAR, kisiler)
+    assert _sira(kisiler, BANKALAR, KARTLAR) == (kisiler, BANKALAR, KARTLAR)
+
+
+def test_paket_sirasi_tirnakli_ve_metin_icindeki_basvuruyu_ayirt_eder() -> None:
+    a = m.TabloOlusturmaIstegi(
+        "a",
+        (
+            m.Sutun("id", ("INTEGER", "PRIMARY KEY")),
+            m.Sutun("b_id", ("INTEGER", 'REFERENCES "b"(id)')),
+            m.Sutun("not_metni", ("TEXT", "DEFAULT 'REFERENCES c(id)'")),
+        ),
+    )
+    b = m.TabloOlusturmaIstegi("b", (m.Sutun("id", ("INTEGER", "PRIMARY KEY")),))
+    c = m.TabloOlusturmaIstegi("c", (m.Sutun("id", ("INTEGER", "PRIMARY KEY")),))
+    assert _sira(a, c, b) == (b, a, c)
+
+
+def test_paket_sirasi_karsilikli_basvuru_dongusunu_kirar_ve_uygulanabilir(
+    veritabani: vt.Veritabani,
+) -> None:
+    a = m.TabloOlusturmaIstegi(
+        "a",
+        (
+            m.Sutun("id", ("INTEGER", "PRIMARY KEY")),
+            m.Sutun("b_id", ("REFERENCES b(id)",)),
+        ),
+    )
+    b = m.TabloOlusturmaIstegi(
+        "b",
+        (
+            m.Sutun("id", ("INTEGER", "PRIMARY KEY")),
+            m.Sutun("a_id", ("REFERENCES a(id)",)),
+        ),
+    )
+    # Döngüde başvurulan taraf öne alınır; SQLite için sıra önemsizdir.
+    assert _sira(b, a) == (a, b)
+    assert _sira(a, b) == (b, a)
+    _uygula(veritabani, m.YapiPaketi((b, a)))
+    assert {"a", "b"} <= _tablolar(veritabani)
+
+
+def test_bos_paket_ve_ayni_tabloyu_iki_kez_kuran_paket_reddedilir() -> None:
+    with pytest.raises(m.GecersizPaket):
+        m.istek_sql(m.YapiPaketi(()))
+    with pytest.raises(m.GecersizPaket):
+        m.istek_sql(m.YapiPaketi((BANKALAR, BANKALAR)))
+
+
+def test_paket_sql_sirali_uyelerin_cumleleridir() -> None:
+    paket = m.YapiPaketi((KARTLAR, BANKALAR))
+    assert m.istek_sql(paket) == ";\n".join(
+        (m.istek_sql(BANKALAR), m.istek_sql(KARTLAR))
+    )
+
+
+def test_paket_tek_islemde_uygulanir(veritabani: vt.Veritabani) -> None:
+    _uygula(veritabani, m.YapiPaketi((HARCAMALAR, IX_KARTLAR, KARTLAR, BANKALAR)))
+    assert {"bankalar", "kartlar", "harcamalar"} <= _tablolar(veritabani)
+    with veritabani.islem() as oturum:
+        indeksler = oturum.execute(
+            text(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'index' AND sql IS NOT NULL"
+            )
+        ).all()
+    assert [str(i[0]) for i in indeksler] == ["ix_kartlar_banka"]
+
+
+def test_paketin_bir_uyesi_duserse_hicbiri_kalmaz(veritabani: vt.Veritabani) -> None:
+    bozuk_indeks = m.IndeksOlusturmaIstegi("ix_yok", "kartlar", ("olmayan_sutun",))
+    with pytest.raises(m.MotorHatasi):
+        _uygula(veritabani, m.YapiPaketi((BANKALAR, KARTLAR, bozuk_indeks)))
+    assert not {"bankalar", "kartlar"} & _tablolar(veritabani)
+
+
+def test_yeniden_kurma_iceren_paket_denetimsiz_islemde_calisir_ve_denetim_geri_acilir(
+    veritabani: vt.Veritabani,
+) -> None:
+    degistirme = m.SutunOzelligiDegistirmeIstegi(
+        "bankalar",
+        (
+            m.Sutun("id", ("INTEGER", "PRIMARY KEY")),
+            m.Sutun("ad", ("TEXT", "NOT NULL", "DEFAULT ''")),
+        ),
+    )
+    paket = m.YapiPaketi((degistirme, KARTLAR, BANKALAR))
+    assert m.yeniden_kurma_gerekir(paket)
+    assert not m.yeniden_kurma_gerekir(m.YapiPaketi((KARTLAR, BANKALAR)))
+    with m.islem_ac(veritabani, paket) as baglanti:
+        assert baglanti.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 0
+        m.uygula_baglantida(baglanti, paket)
+    assert _sutunlar(veritabani, "bankalar")[1] == ("ad", "TEXT", 1, "''")
+    assert "kartlar" in _tablolar(veritabani)
+    with veritabani.islem() as oturum:
+        assert oturum.execute(text("PRAGMA foreign_keys")).scalar_one() == 1

@@ -37,6 +37,9 @@ class KopyaDegerDegisti(MotorHatasi): ...
 class KisitlarUyusmuyor(MotorHatasi): ...
 
 
+class GecersizPaket(MotorHatasi, ValueError): ...
+
+
 @dataclass(frozen=True, slots=True)
 class Sutun:
     ad: str
@@ -80,13 +83,21 @@ class IndeksSilmeIstegi:
     indeks: str
 
 
-type YapiIstegi = (
+type YapiIsi = (
     TabloOlusturmaIstegi
     | SutunEklemeIstegi
     | SutunOzelligiDegistirmeIstegi
     | IndeksOlusturmaIstegi
     | IndeksSilmeIstegi
 )
+
+
+@dataclass(frozen=True, slots=True)
+class YapiPaketi:
+    isler: tuple[YapiIsi, ...]
+
+
+type YapiIstegi = YapiIsi | YapiPaketi
 
 
 # --- ad ve parça sınırı: SQL'e güvenle yazılabilmek için ---------------------------
@@ -275,9 +286,13 @@ def istek_sql(istek: YapiIstegi) -> str:
             return indeks_olusturma_sql(istek)
         case IndeksSilmeIstegi():
             return indeks_silme_sql(istek)
+        case YapiPaketi():
+            return ";\n".join(istek_sql(is_) for is_ in paketi_sirala(istek))
 
 
 def istek_sql_baglantida(baglanti: Connection, istek: YapiIstegi) -> str:
+    if isinstance(istek, YapiPaketi):
+        return _paket_onizlemesi(baglanti, istek)
     sql = istek_sql(istek)
     if not isinstance(istek, SutunOzelligiDegistirmeIstegi):
         return sql
@@ -313,6 +328,8 @@ def _yeniden_kurma_onizlemesi(
 
 
 def yeniden_kurma_gerekir(istek: YapiIstegi) -> bool:
+    if isinstance(istek, YapiPaketi):
+        return any(yeniden_kurma_gerekir(is_) for is_ in istek.isler)
     return isinstance(istek, SutunOzelligiDegistirmeIstegi)
 
 
@@ -347,8 +364,115 @@ def uygula_baglantida(baglanti: Connection, istek: YapiIstegi) -> None:
                 baglanti.exec_driver_sql(indeks_olusturma_sql(istek))
             case IndeksSilmeIstegi():
                 baglanti.exec_driver_sql(indeks_silme_sql(istek))
+            case YapiPaketi():
+                for is_ in paketi_sirala(istek):
+                    uygula_baglantida(baglanti, is_)
     except SQLAlchemyError as hata:
         raise _motor_hatasi(hata) from hata
+
+
+# --- yapı paketi: bağlı işler tek istek, sırayı motor çözer --------------------------
+
+_METIN_SABITI = re.compile(r"'(?:[^']|'')*'")
+_BASVURU = re.compile(
+    r"\bREFERENCES\s+(?:\"([^\"]+)\"|`([^`]+)`|\[([^\]]+)\]|([A-Za-z_][A-Za-z0-9_]*))",
+    re.IGNORECASE,
+)
+
+
+def paketi_sirala(paket: YapiPaketi) -> tuple[YapiIsi, ...]:
+    isler = paket.isler
+    if not isler:
+        raise GecersizPaket("paket boş olamaz; en az bir yapı işi taşımalı")
+    kurulanlar: set[str] = set()
+    for is_ in isler:
+        istek_sql(is_)
+        if isinstance(is_, TabloOlusturmaIstegi):
+            if is_.tablo in kurulanlar:
+                raise GecersizPaket(f"{is_.tablo}: paket aynı tabloyu iki kez kuramaz")
+            kurulanlar.add(is_.tablo)
+    oncekiler = [
+        [b for b, diger in enumerate(isler) if b != s and _once_gelir(diger, is_)]
+        for s, is_ in enumerate(isler)
+    ]
+    sirali: list[int] = []
+    yolda: set[int] = set()
+
+    def ziyaret(s: int) -> None:
+        if s in sirali or s in yolda:
+            return
+        yolda.add(s)
+        for onceki in oncekiler[s]:
+            ziyaret(onceki)
+        yolda.discard(s)
+        sirali.append(s)
+
+    for s in range(len(isler)):
+        ziyaret(s)
+    return tuple(isler[s] for s in sirali)
+
+
+def _once_gelir(a: YapiIsi, b: YapiIsi) -> bool:
+    match a:
+        case TabloOlusturmaIstegi():
+            return a.tablo == _dokunulan_tablo(b) or a.tablo in _basvurulan_tablolar(b)
+        case SutunEklemeIstegi():
+            return (
+                isinstance(b, SutunOzelligiDegistirmeIstegi | IndeksOlusturmaIstegi)
+                and b.tablo == a.tablo
+            )
+        case SutunOzelligiDegistirmeIstegi():
+            return isinstance(b, IndeksOlusturmaIstegi) and b.tablo == a.tablo
+        case IndeksSilmeIstegi():
+            return isinstance(b, IndeksOlusturmaIstegi) and b.indeks == a.indeks
+        case IndeksOlusturmaIstegi():
+            return False
+
+
+def _dokunulan_tablo(is_: YapiIsi) -> str | None:
+    if isinstance(is_, IndeksSilmeIstegi):
+        return None
+    return is_.tablo
+
+
+def _basvurulan_tablolar(is_: YapiIsi) -> set[str]:
+    match is_:
+        case TabloOlusturmaIstegi() | SutunOzelligiDegistirmeIstegi():
+            parcalar = [p for s in is_.sutunlar for p in s.ozellikler] + list(
+                is_.kisitlar
+            )
+        case SutunEklemeIstegi():
+            parcalar = list(is_.sutun.ozellikler)
+        case IndeksOlusturmaIstegi() | IndeksSilmeIstegi():
+            return set()
+    adlar: set[str] = set()
+    for parca in parcalar:
+        for eslesme in _BASVURU.finditer(_METIN_SABITI.sub("''", parca)):
+            ad = next(g for g in eslesme.groups() if g)
+            adlar.add(str(ad).casefold())
+    return adlar
+
+
+def _paket_onizlemesi(baglanti: Connection, paket: YapiPaketi) -> str:
+    # Sonraki üyenin önizlemesi öncekilerin kurduğu yapıya göre üretilsin diye
+    # yeniden kurma dışındaki üyeler bir SAVEPOINT içinde uygulanır ve geri
+    # alınır. Yeniden kurma uygulanmaz: yabancı anahtar denetimi açıkken
+    # (bekleyenler) ve kapalıyken (onay) aynı metin çıkmalıdır.
+    cumleler: list[str] = []
+    baglanti.exec_driver_sql("SAVEPOINT paket_onizleme")
+    try:
+        uygulanabilir = True
+        for is_ in paketi_sirala(paket):
+            cumleler.append(istek_sql_baglantida(baglanti, is_))
+            if uygulanabilir and not yeniden_kurma_gerekir(is_):
+                try:
+                    uygula_baglantida(baglanti, is_)
+                except MotorHatasi:
+                    uygulanabilir = False
+    finally:
+        baglanti.exec_driver_sql("ROLLBACK TO paket_onizleme")
+        baglanti.exec_driver_sql("RELEASE paket_onizleme")
+    return ";\n".join(cumleler)
 
 
 def _tablo_olustur(baglanti: Connection, istek: TabloOlusturmaIstegi) -> None:

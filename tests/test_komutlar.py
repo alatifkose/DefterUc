@@ -300,3 +300,39 @@ def test_yanlis_onizleme_kodu_karar_yazmaz(
     assert "karar verilmedi" in capsys.readouterr().err
     assert "kisiler" not in _tablolar(ayar)
     assert not any("onay_karari" in s for s in _log_satirlari(ayar))
+
+
+# --- yapı paketi komut satırında ---------------------------------------------------
+
+PAKET = m.YapiPaketi(
+    (
+        m.TabloOlusturmaIstegi(
+            "kartlar",
+            (
+                m.Sutun("id", ("INTEGER", "PRIMARY KEY")),
+                m.Sutun("banka_id", ("INTEGER", "REFERENCES bankalar(id)")),
+            ),
+        ),
+        m.TabloOlusturmaIstegi(
+            "bankalar",
+            (m.Sutun("id", ("INTEGER", "PRIMARY KEY")), m.Sutun("ad", ("TEXT",))),
+        ),
+    )
+)
+
+
+def test_paket_bekleyenlerde_sirasiyla_gosterilir_ve_tek_onayla_uygulanir(
+    ayar: ay.Ayarlar, capsys: pytest.CaptureFixture[str]
+) -> None:
+    kimlik = _birak(ayar, PAKET)
+    assert baslangic.main([komutlar.KOMUT_BEKLEYENLER]) == 0
+    cikti = capsys.readouterr().out
+    assert f"[{kimlik}] yapi_paketi" in cikti
+    assert cikti.index('CREATE TABLE "bankalar"') < cikti.index(
+        'CREATE TABLE "kartlar"'
+    )
+    assert "1) tablo_olusturma bankalar" in cikti
+    assert "2) tablo_olusturma kartlar" in cikti
+    assert baslangic.main(_goster_ve_komutu_al(kimlik, capsys)) == 0
+    assert "onaylandı ve uygulandı (yapi_paketi)" in capsys.readouterr().out
+    assert {"bankalar", "kartlar"} <= _tablolar(ayar)

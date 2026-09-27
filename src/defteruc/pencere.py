@@ -159,7 +159,10 @@ class OnayPenceresi(QMainWindow):
         kimlik = self.secili_kimlik()
         kayit = self._kayitlar.get(kimlik) if kimlik is not None else None
         self.sql.setPlainText(kayit.sql if kayit else "")
-        self.aciklama.setText(onay.istek_aciklamasi(kayit) if kayit else "")
+        metinler = (
+            [onay.istek_ozeti(kayit), onay.istek_aciklamasi(kayit)] if kayit else []
+        )
+        self.aciklama.setText("\n".join(t for t in metinler if t))
         var = kayit is not None
         self.onayla_dugmesi.setEnabled(var)
         self.reddet_dugmesi.setEnabled(var)

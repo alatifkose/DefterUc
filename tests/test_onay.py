@@ -94,6 +94,12 @@ ORNEK_ISTEKLER: tuple[m.YapiIstegi, ...] = (
         "ix_t_a", "t", ("a", "b DESC"), benzersiz=True, kosul="a > 0"
     ),
     m.IndeksSilmeIstegi("ix_t_a"),
+    m.YapiPaketi(
+        (
+            m.IndeksOlusturmaIstegi("ix_p", "p", ("a",)),
+            m.TabloOlusturmaIstegi("p", (m.Sutun("a", ("INTEGER",)),)),
+        )
+    ),
 )
 
 
@@ -659,3 +665,111 @@ def test_eski_onay_fk_denetimi_hatasiyla_karara_donusmez(
     with veritabani.islem() as oturum:
         assert oturum.execute(text("PRAGMA table_info(kuyruk)")).one()[3] == 0
         assert oturum.execute(text("SELECT rowid, deger FROM kuyruk")).all() == [(7, 3)]
+
+
+# --- yapı paketi: tek istek, tek onay, tek işlem; sırayı sistem belirler --------------
+
+IX_KISILER = m.IndeksOlusturmaIstegi("ix_kisiler_ad", "kisiler", ("ad_soyad",))
+PAKET_KISILER = m.YapiPaketi((IX_KISILER, KISILER_YENI, KISILER))
+
+
+def _indeksler(v: vt.Veritabani) -> set[str]:
+    with v.islem() as oturum:
+        satirlar = oturum.execute(
+            text(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'index' AND sql IS NOT NULL"
+            )
+        ).all()
+    return {str(s[0]) for s in satirlar}
+
+
+def test_paket_tek_talep_olarak_bekler_ve_sirali_onizleme_tasir(
+    veritabani: vt.Veritabani,
+) -> None:
+    kimlik = onay.istek_birak(veritabani, PAKET_KISILER)
+    kayit = onay.kayit_getir(veritabani, kimlik)
+    assert kayit.tur == "yapi_paketi"
+    assert kayit.durum is onay.Durum.BEKLIYOR
+    assert kayit.istek == PAKET_KISILER
+    assert kayit.sql.startswith(m.istek_sql(KISILER) + ";\n")
+    # Yeniden kurma önizlemesi, paketin kendi kurduğu tabloya göre üretilir:
+    # kopya cümlesi ancak tablo (geçici olarak) varken üretilebilir.
+    assert "INSERT OR ABORT" in kayit.sql
+    assert kayit.sql.endswith(m.istek_sql(IX_KISILER))
+    assert [k.kimlik for k in onay.bekleyenler(veritabani)] == [kimlik]
+    assert "kisiler" not in _tablolar(veritabani)
+
+
+def test_paket_onizlemesi_bekleyenlerde_ve_onayda_ayni_ve_calisanla_ayni(
+    veritabani: vt.Veritabani,
+) -> None:
+    kimlik = onay.istek_birak(veritabani, PAKET_KISILER)
+    ilk = onay.kayit_getir(veritabani, kimlik).sql
+    assert onay.bekleyenler(veritabani)[0].sql == ilk
+    assert onay.bekleyenler(veritabani)[0].sql == ilk
+    _onizleme_calisanla_ayni(veritabani, kimlik)
+    assert _sutun_turleri(veritabani, "kisiler") == {
+        "id": "INTEGER",
+        "ad_soyad": "TEXT",
+    }
+    with veritabani.islem() as oturum:
+        varsayilan = oturum.execute(text('PRAGMA table_info("kisiler")')).all()[1][4]
+        assert oturum.execute(text("PRAGMA foreign_keys")).scalar_one() == 1
+    assert varsayilan == "''"
+    assert "ix_kisiler_ad" in _indeksler(veritabani)
+
+
+def test_paket_uyesi_duserse_uygulanamadi_ve_hicbir_tablo_kalmaz(
+    veritabani: vt.Veritabani,
+) -> None:
+    bozuk = m.IndeksOlusturmaIstegi("ix_yok", "kisiler", ("olmayan_sutun",))
+    kimlik = onay.istek_birak(veritabani, m.YapiPaketi((bozuk, KISILER)))
+    kayit = _gorup_onayla(veritabani, kimlik)
+    assert kayit.durum is onay.Durum.UYGULANAMADI
+    assert "olmayan_sutun" in (kayit.sonuc or "")
+    assert "kisiler" not in _tablolar(veritabani)
+    assert "ix_yok" not in _indeksler(veritabani)
+
+
+def test_bos_paket_daha_kayit_yazilmadan_reddedilir(veritabani: vt.Veritabani) -> None:
+    with pytest.raises(m.GecersizPaket):
+        onay.istek_birak(veritabani, m.YapiPaketi(()))
+    assert onay.bekleyenler(veritabani) == ()
+
+
+def test_paket_ozeti_uygulanma_sirasini_soyler(veritabani: vt.Veritabani) -> None:
+    kimlik = onay.istek_birak(veritabani, PAKET_KISILER)
+    ozet = onay.istek_ozeti(onay.kayit_getir(veritabani, kimlik))
+    assert (
+        ozet.index("1) tablo_olusturma kisiler")
+        < ozet.index("2) sutun_ozelligi_degistirme kisiler")
+        < ozet.index("3) indeks_olusturma ix_kisiler_ad")
+    )
+    assert (
+        onay.istek_ozeti(
+            onay.kayit_getir(veritabani, onay.istek_birak(veritabani, KISILER))
+        )
+        == ""
+    )
+
+
+def test_paket_aciklamasi_uyelerin_uyarilarini_toplar(
+    veritabani: vt.Veritabani,
+) -> None:
+    kimlik = onay.istek_birak(veritabani, m.YapiPaketi((KISILER, DONUSUMLU)))
+    aciklama = onay.istek_aciklamasi(onay.kayit_getir(veritabani, kimlik))
+    assert "money" in aciklama and "value" in aciklama
+    assert (
+        onay.istek_aciklamasi(
+            onay.kayit_getir(veritabani, onay.istek_birak(veritabani, PAKET_KISILER))
+        )
+        == ""
+    )
+
+
+def test_paket_paket_iceremez() -> None:
+    ic = onay.istek_json(m.YapiPaketi((KISILER,)))
+    metin = '{"isler": [{"tur": "yapi_paketi", "istek": ' + ic + "}]}"
+    with pytest.raises(ValueError):
+        onay.istek_coz("yapi_paketi", metin)

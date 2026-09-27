@@ -5,11 +5,11 @@ import math
 import sys
 from dataclasses import asdict, dataclass
 from importlib.metadata import PackageNotFoundError, version
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from defteruc import gunluk
 from defteruc.ayarlar import Ayarlar
@@ -32,6 +32,7 @@ ARAC_SUTUN_EKLEME_ISTEGI = "sutun_ekleme_istegi"
 ARAC_SUTUN_OZELLIGI_DEGISTIRME_ISTEGI = "sutun_ozelligi_degistirme_istegi"
 ARAC_INDEKS_OLUSTURMA_ISTEGI = "indeks_olusturma_istegi"
 ARAC_INDEKS_SILME_ISTEGI = "indeks_silme_istegi"
+ARAC_YAPI_PAKETI_ISTEGI = "yapi_paketi_istegi"
 ARAC_ISTEK_DURUMU = "istek_durumu"
 ARAC_BEKLEYEN_ISTEKLER = "bekleyen_istekler"
 ARAC_YAPIYI_OKU = "yapiyi_oku"
@@ -44,6 +45,7 @@ ARACLAR = (
     ARAC_SUTUN_OZELLIGI_DEGISTIRME_ISTEGI,
     ARAC_INDEKS_OLUSTURMA_ISTEGI,
     ARAC_INDEKS_SILME_ISTEGI,
+    ARAC_YAPI_PAKETI_ISTEGI,
     ARAC_ISTEK_DURUMU,
     ARAC_BEKLEYEN_ISTEKLER,
     ARAC_YAPIYI_OKU,
@@ -66,6 +68,11 @@ SUNUCU_TALIMATI = (
     "önce yapiyi_oku ile mevcut tabloları gör. Yeni tablo, sütun, sütun "
     "özelliği ya da indeks gerekiyorsa ilgili *_istegi aracıyla yapı isteği "
     "bırak; istek hemen uygulanmaz, BEKLIYOR döner ve bir talep kimliği verir. "
+    "Bir belgeden birbirine bağlı birden fazla yapı işi çıkıyorsa (örn. bankalar "
+    "ve ona REFERENCES ile bağlı kartlar, ya da yeni tablo ve indeksi) hepsini "
+    "yapi_paketi_istegi ile TEK istek olarak bırak: tek talep kimliği, tek onay; "
+    "hepsi birlikte uygulanır ya da hiçbiri; uygulanma sırasını sistem belirler, "
+    "sen sıra düşünme. Bağlı işleri ayrı ayrı bırakma. "
     "Kullanıcı isteği uygulamanın kendi arayüzünden onaylar ya da reddeder; sen "
     "onay alamazsın ve onayı bekletemezsin. Aynı talep kimliğiyle istek_durumu "
     "aracını sorarak sonucu öğren (UYGULANDI, REDDEDILDI, UYGULANAMADI). Tablo "
@@ -112,6 +119,16 @@ ARAC_INDEKS_OLUSTURMA_ACIKLAMASI = (
 )
 ARAC_INDEKS_SILME_ACIKLAMASI = (
     "İndeks silmek için yapı isteği bırakır." + ISTEK_ACIKLAMA_KUYRUGU
+)
+ARAC_YAPI_PAKETI_ACIKLAMASI = (
+    "Birbirine bağlı yapı işlerini TEK yapı isteği (yapı paketi) olarak bırakır: "
+    "tek talep kimliği, tek onay, tek işlem; biri düşerse hiçbiri uygulanmaz. "
+    "isler: her biri tur alanıyla (tablo_olusturma, sutun_ekleme, "
+    "sutun_ozelligi_degistirme, indeks_olusturma, indeks_silme) ve o türün tek "
+    "başına aldığı alanlarla verilir. Uygulanma sırasını sistem belirler "
+    "(REFERENCES ile başvurulan tablo önce, tabloyu kuran iş ona dokunanlardan "
+    "önce); verilen sıra önemsizdir. Yanıttaki sql sıralı cümleler, ozet "
+    "uygulanma sırasıdır." + ISTEK_ACIKLAMA_KUYRUGU
 )
 ARAC_ISTEK_DURUMU_ACIKLAMASI = (
     "Talep kimliğiyle yapı isteğinin durumunu döndürür: BEKLIYOR, UYGULANDI, "
@@ -195,6 +212,86 @@ class SutunGirdisi(BaseModel):
         return motor.Sutun(self.ad, self.ozellikler)
 
 
+class TabloOlusturmaGirdisi(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tur: Literal["tablo_olusturma"]
+    tablo: str
+    sutunlar: tuple[SutunGirdisi, ...]
+    kisitlar: tuple[str, ...] = ()
+    secenekler: tuple[str, ...] = ()
+
+    def is_(self) -> motor.YapiIsi:
+        return motor.TabloOlusturmaIstegi(
+            self.tablo,
+            tuple(s.sutun() for s in self.sutunlar),
+            self.kisitlar,
+            self.secenekler,
+        )
+
+
+class SutunEklemeGirdisi(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tur: Literal["sutun_ekleme"]
+    tablo: str
+    sutun: SutunGirdisi
+
+    def is_(self) -> motor.YapiIsi:
+        return motor.SutunEklemeIstegi(self.tablo, self.sutun.sutun())
+
+
+class SutunOzelligiDegistirmeGirdisi(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tur: Literal["sutun_ozelligi_degistirme"]
+    tablo: str
+    sutunlar: tuple[SutunGirdisi, ...]
+    kisitlar: tuple[str, ...] = ()
+    secenekler: tuple[str, ...] = ()
+    deger_donusumu_izinli: tuple[str, ...] = ()
+
+    def is_(self) -> motor.YapiIsi:
+        return motor.SutunOzelligiDegistirmeIstegi(
+            self.tablo,
+            tuple(s.sutun() for s in self.sutunlar),
+            self.kisitlar,
+            self.secenekler,
+            self.deger_donusumu_izinli,
+        )
+
+
+class IndeksOlusturmaGirdisi(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tur: Literal["indeks_olusturma"]
+    indeks: str
+    tablo: str
+    sutunlar: tuple[str, ...]
+    benzersiz: bool = False
+    kosul: str = ""
+
+    def is_(self) -> motor.YapiIsi:
+        return motor.IndeksOlusturmaIstegi(
+            self.indeks, self.tablo, self.sutunlar, self.benzersiz, self.kosul
+        )
+
+
+class IndeksSilmeGirdisi(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tur: Literal["indeks_silme"]
+    indeks: str
+
+    def is_(self) -> motor.YapiIsi:
+        return motor.IndeksSilmeIstegi(self.indeks)
+
+
+PaketIsiGirdisi = Annotated[
+    TabloOlusturmaGirdisi
+    | SutunEklemeGirdisi
+    | SutunOzelligiDegistirmeGirdisi
+    | IndeksOlusturmaGirdisi
+    | IndeksSilmeGirdisi,
+    Field(discriminator="tur"),
+]
+
+
 @dataclass(frozen=True)
 class SistemDurumu:
     uygulama_surumu: str
@@ -258,6 +355,7 @@ def kayit_sozlugu(kayit_: onay.YapiIstegiKaydi) -> dict[str, object]:
         "sql": kayit_.sql,
         "istek": json.loads(onay.istek_json(kayit_.istek)),
         "aciklama": onay.istek_aciklamasi(kayit_),
+        "ozet": onay.istek_ozeti(kayit_),
         "olusturma": kayit_.olusturma,
         "karar": kayit_.karar,
         "sonuc": kayit_.sonuc,
@@ -350,6 +448,10 @@ def sunucu_kur(ayarlar: Ayarlar) -> MCPServer[None]:
     )
     def indeks_silme_istegi(indeks: str) -> dict[str, object]:
         return istek_birak(motor.IndeksSilmeIstegi(indeks))
+
+    @sunucu.tool(name=ARAC_YAPI_PAKETI_ISTEGI, description=ARAC_YAPI_PAKETI_ACIKLAMASI)
+    def yapi_paketi_istegi(isler: tuple[PaketIsiGirdisi, ...]) -> dict[str, object]:
+        return istek_birak(motor.YapiPaketi(tuple(is_.is_() for is_ in isler)))
 
     @sunucu.tool(name=ARAC_ISTEK_DURUMU, description=ARAC_ISTEK_DURUMU_ACIKLAMASI)
     def istek_durumu(talep_kimligi: int) -> dict[str, object]:
