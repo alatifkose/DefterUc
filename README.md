@@ -195,6 +195,12 @@ Git geçmişinde durur (son hâli `e77a222`). Kalanlar:
   biri düşerse hiçbiri kalmaz. Uygulanma sırasını motor belirler, Cowork
   sıra düşünmez. Ayrıntı "Yapı paketi" bölümünde.
 
+* **Sunucu talimatında nesne kuralı** (2026-09-27, dış inceleme üzerine):
+  belgeden hangi bilgilerin ayrı nesne olduğunu Cowork genel bir ölçütle
+  çıkarır (bağımsız kimlik, başka kayıtların bağlanacağı şey), önce arar,
+  varsa bağlar, belirsizse sorar; talimat alan adı taşımaz. Ayrıntı "MCP
+  kapısı" bölümünde.
+
 * **MCP araçları** (`mcp_kapisi.py`, 2026-09-25): altı yapı isteği aracı
   (beş tekil iş ve `yapi_paketi_istegi`), `istek_durumu`,
   `bekleyen_istekler`, `yapiyi_oku`, `satir_ekle`, `satirlari_oku`. Ayrıntı
@@ -895,7 +901,23 @@ Yapı isteği araçları isteği uygulamaz: motorun SQL üretimiyle doğrular
 kimliğini ve **çalışacak SQL cümlesini** döndürür. Onay uygulamanın kendi
 arayüzünden gelir (bugün `defteruc onayla`); Cowork aynı talep kimliğiyle
 `istek_durumu` sorar. Bu döngü Aşama 3.4'te Cowork'la ölçüldü. Sunucu
-talimatı (`SUNUCU_TALIMATI`) akışı ve ad kuralını Cowork'a anlatır. Araç
+talimatı (`SUNUCU_TALIMATI`) akışı, ad kuralını ve **nesne kuralını**
+Cowork'a anlatır. Nesne kuralı (2026-09-27, dış inceleme üzerine): belgede
+görülen bir bilgi belgenin dışında da var olan, başka belgelerde yeniden
+karşılaşılacak ve başka kayıtların bağlanacağı bağımsız bir şeyi
+tanımlıyorsa ayrı nesnedir, belgenin satırına metin olarak gömülmez;
+yalnız o kaydın özelliği olan bilgi nesne değildir, tekrar etmek tek başına
+sebep değildir; nesne için önce mevcut tablo ve satırlar aranır, varsa
+bağlanır, yoksa yapı isteği bırakılır ya da satır yazılır, eksik bilgi kayıt
+açmaya engel değildir; mevcut kayıtla aynı olup olmadığı belirsizse tahmin
+edilmez, kullanıcıya bildirilir. Talimat **alan adı taşımaz**: hangi
+nesnelerin gerektiğini Cowork belgeden çıkarır; talimata finans nesnesi adı
+yazmak "hazır kalıp tablo yok" kararını arka kapıdan bozardı (2026-09-27'de
+paket cümlesindeki "bankalar, kartlar" örneği ve "kisiler" örneği bu
+sebeple kaldırıldı). Test (`tests/test_mcp_kapisi.py`) talimatta finans ve
+belge alanı köklerinin geçmediğini ve kuralın anahtar cümlelerinin
+bulunduğunu doğrular. Kullanıcının kendi alan kararları talimata değil
+kararlar defterine yazılacak (tasarımı konuşuluyor, henüz yok). Araç
 girdileri pydantic ile şemalanır (`SutunGirdisi`: `ad`, `ozellikler`); satır
 değerleri metin, tam sayı, ondalık, doğru/yanlış ya da `null` olur ve SQL'e
 parametre olarak geçer, metne eklenmez. Tablo ve sütun adları motorun ad

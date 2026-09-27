@@ -2,6 +2,7 @@ import copy
 import dataclasses
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -974,3 +975,58 @@ def test_yapi_paketi_bos_ya_da_gecersiz_uyeyle_arac_hatasi_olur(
         {"isler": [{"tur": "indeks_silme", "indeks": "Şema"}]},
     )
     assert _cagir(sunucu, mcp_kapisi.ARAC_BEKLEYEN_ISTEKLER, {}) == {"istekler": []}
+
+
+# --- sunucu talimatı: alan adı taşımaz, genel nesne kuralını söyler ----------------
+
+_TALIMAT_TURKCE_ASCII = str.maketrans("çğıöşüÇĞİÖŞÜ", "cgiosuCGIOSU")
+TALIMATTA_YASAK_KOKLER = (
+    "FINANS",
+    "BANKA",
+    "HESAP",
+    "KART",
+    "KREDI",
+    "KMH",
+    "PARA",
+    "VARLIK",
+    "BORC",
+    "GIDER",
+    "BAKIYE",
+    "KISILER",
+    "FIS",
+    "FATURA",
+    "EKSTRE",
+    "ODEME",
+    "HARCAMA",
+)
+
+
+def _talimat_kelimeleri(metin: str) -> list[str]:
+    return re.findall(r"[A-Za-z_]+", metin.translate(_TALIMAT_TURKCE_ASCII).upper())
+
+
+def test_sunucu_talimati_alan_adi_tasimaz() -> None:
+    kelimeler = _talimat_kelimeleri(mcp_kapisi.SUNUCU_TALIMATI)
+    sizanlar = sorted(
+        {
+            k
+            for k in kelimeler
+            if any(k.startswith(kok) for kok in TALIMATTA_YASAK_KOKLER)
+        }
+    )
+    assert sizanlar == [], sizanlar
+
+
+def test_sunucu_talimati_genel_nesne_kuralini_soyler() -> None:
+    talimat = mcp_kapisi.SUNUCU_TALIMATI.casefold()
+    for parca in (
+        "bağımsız",
+        "önce",
+        "satirlari_oku",
+        "yapi_paketi_istegi",
+        "gömme",
+        "belirsiz",
+        "tahmin etme",
+        "kullanıcıya",
+    ):
+        assert parca in talimat, parca
