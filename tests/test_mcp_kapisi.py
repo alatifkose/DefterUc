@@ -1030,3 +1030,9 @@ def test_sunucu_talimati_genel_nesne_kuralini_soyler() -> None:
         "kullanıcıya",
     ):
         assert parca in talimat, parca
+
+
+def test_sunucu_talimati_kararlar_tablosunu_soyler() -> None:
+    talimat = mcp_kapisi.SUNUCU_TALIMATI.casefold()
+    for parca in ("kararlar", "işe başlamadan", "uy", "açıkça"):
+        assert parca in talimat, parca

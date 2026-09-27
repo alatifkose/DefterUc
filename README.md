@@ -916,8 +916,17 @@ yazmak "hazır kalıp tablo yok" kararını arka kapıdan bozardı (2026-09-27'd
 paket cümlesindeki "bankalar, kartlar" örneği ve "kisiler" örneği bu
 sebeple kaldırıldı). Test (`tests/test_mcp_kapisi.py`) talimatta finans ve
 belge alanı köklerinin geçmediğini ve kuralın anahtar cümlelerinin
-bulunduğunu doğrular. Kullanıcının kendi alan kararları talimata değil
-kararlar defterine yazılacak (tasarımı konuşuluyor, henüz yok). Araç
+bulunduğunu doğrular. **Kullanıcının kararları** (2026-09-27, karar:
+Abdüllatif, dış inceleme üzerine): kararlar koda gömülü özel bir sistem
+tablosunda değil, Cowork'un motorla açtığı `kararlar` adlı **sıradan bir
+tabloda** durur; motor "karar" diye özel bir şey bilmez. Cowork tabloyu
+yapı isteğiyle açar (bir kez onay), kullanıcı sohbette söyleyince satır
+olarak yazar, her işe başlamadan `satirlari_oku` ile okur ve uyar. Talimata
+giren tek cümle budur (testli); ayrı araç, komut, sekme ya da onay
+altyapısı kurulmadı, önce mevcut araçlarla denenir. Bilinen bedel: satır
+yazmak onaysız olduğundan Cowork'un o tabloya yalnız kullanıcının açıkça
+verdiği kararı yazması talimatla sağlanır, sistemle değil; gerekirse
+sonra engellenir. Araç
 girdileri pydantic ile şemalanır (`SutunGirdisi`: `ad`, `ozellikler`); satır
 değerleri metin, tam sayı, ondalık, doğru/yanlış ya da `null` olur ve SQL'e
 parametre olarak geçer, metne eklenmez. Tablo ve sütun adları motorun ad
