@@ -465,6 +465,7 @@ def paketi_sirala(paket: YapiPaketi) -> tuple[YapiIsi, ...]:
                 raise GecersizPaket(f"{is_.tablo}: paket aynı tabloyu iki kez kuramaz")
             kurulanlar.add(is_.tablo)
     _hesaplama_dongusunu_reddet(isler)
+    _onkosul_dongusunu_reddet(isler)
     oncekiler = [
         [b for b, diger in enumerate(isler) if b != s and _once_gelir(diger, is_)]
         for s, is_ in enumerate(isler)
@@ -497,15 +498,60 @@ def _hesaplama_dongusunu_reddet(isler: tuple[YapiIsi, ...]) -> None:
         hesaplama_dongusunu_denetle(tablo, sutunlar)
 
 
+def _sutun_onkosulu(a: YapiIsi, b: YapiIsi) -> bool:
+    # Sütun düzeyi yapısal önkoşul: b işi çalışabilmek için a'nın eklediği sütuna
+    # ihtiyaç duyuyorsa (hesaplama ifadesi ya da CHECK kısıtı) a önce gelir.
+    # CHECK'in kendi sütununa başvurması önkoşul değildir; sütun kendi ADD'iyle oluşur.
+    if not (isinstance(a, SutunEklemeIstegi) and isinstance(b, SutunEklemeIstegi)):
+        return False
+    if a.tablo != b.tablo:
+        return False
+    gereken = hesaplama_bagimliliklari(b.sutun) | kisit_bagimliliklari(b.sutun)
+    return a.sutun.ad.casefold() in gereken
+
+
+def _onkosul_dongusunu_reddet(isler: tuple[YapiIsi, ...]) -> None:
+    # Sütun önkoşulları (AS + CHECK) birbirini beklerse hiçbir ADD sırası çalışmaz.
+    # Bu hesaplama döngüsü değil, işlem sıralaması çözümsüzlüğüdür; açık hata verir.
+    # Tablolar arası REFERENCES döngüsü buraya girmez, o kurulabilir.
+    isler_ = [is_ for is_ in isler if isinstance(is_, SutunEklemeIstegi)]
+    durum: dict[int, str] = {}
+    yol: list[SutunEklemeIstegi] = []
+
+    def gez(s: SutunEklemeIstegi) -> None:
+        durum[id(s)] = "yolda"
+        yol.append(s)
+        for d in isler_:
+            if d is s or not _sutun_onkosulu(d, s):
+                continue
+            if durum.get(id(d)) == "yolda":
+                bas = next(i for i, y in enumerate(yol) if y is d)
+                zincir = [f"{y.tablo}.{y.sutun.ad}" for y in yol[bas:]] + [
+                    f"{d.tablo}.{d.sutun.ad}"
+                ]
+                raise GecersizPaket(
+                    "işlem sıralaması çözümsüz: sütun eklemeleri birbirinin sütununu "
+                    "bekliyor (" + " ← ".join(zincir) + "); ayrı ADD COLUMN "
+                    "işleriyle hiçbir sırada kurulamaz. Aynı yapı tek tablo "
+                    "tanımında verilebilir."
+                )
+            if id(d) not in durum:
+                gez(d)
+        yol.pop()
+        durum[id(s)] = "bitti"
+
+    for s in isler_:
+        if id(s) not in durum:
+            gez(s)
+
+
 def _once_gelir(a: YapiIsi, b: YapiIsi) -> bool:
     match a:
         case TabloOlusturmaIstegi():
             return a.tablo == _dokunulan_tablo(b) or a.tablo in _basvurulan_tablolar(b)
         case SutunEklemeIstegi():
             if isinstance(b, SutunEklemeIstegi):
-                return b.tablo == a.tablo and (
-                    a.sutun.ad.casefold() in hesaplama_bagimliliklari(b.sutun)
-                )
+                return _sutun_onkosulu(a, b)
             return (
                 isinstance(b, SutunOzelligiDegistirmeIstegi | IndeksOlusturmaIstegi)
                 and b.tablo == a.tablo

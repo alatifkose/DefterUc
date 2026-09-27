@@ -369,8 +369,19 @@ sütun ekleme kuralı gereği yeniden kurmadan önce gelir ("no such column").
 bu bağı çözmüyor; çözmesi istenirse ayrı iş. İkinci sınır: kapsam kararı
 gereği yalnız hesaplanan sütun ifadesi okunur; `CHECK (d > base)` gibi bir
 kısıt da aynı pakette eklenen `base`'e dayanabilir ve SQLite bunu da "no such
-column" ile reddeder (betikle doğrulandı), sıralayıcı CHECK'i okumaz (plan
-commit 3 ile kapanacak).
+column" ile reddeder (betikle doğrulandı). **Kapandı (plan commit 3):**
+sütun düzeyi **yapısal önkoşul** (`_sutun_onkosulu`) hesaplama ifadesi ve
+CHECK kısıtlarından birlikte okunur; `d CHECK (d > base)` ile `base`
+eklemesi iki giriş sırasında da `base, d` olur ve gerçek veritabanında
+uygulanır (testli, çoklu CHECK dahil). CHECK'in kendi sütununa başvurması
+önkoşul değildir; sütun kendi ADD'iyle oluşur. Hesaplama grafiği ayrı
+kalır: `a CHECK (a < b)` ile `b AS (a + 1)` iki ayrı ADD ile hiçbir sırada
+kurulamaz (SQLite iki sırada da "no such column", betikle doğrulandı); bu
+hesaplama döngüsü değil **işlem sıralaması çözümsüzlüğüdür** ve
+`GecersizPaket` mesajı bekleyen sütun zincirini yazıp aynı yapının tek tablo
+tanımında verilebileceğini söyler (tek CREATE'te kabul edilir, `a=5` için
+`b=6` okunur; testli). Tablolar arası karşılıklı `REFERENCES` bu denetime
+girmez, kurulabilir olduğu için döngü diye reddedilmez.
 
 Başvuru bir ayrıştırma değil taramadır: tek tırnaklı metin sabitleri
 çıkarıldıktan sonra `REFERENCES <ad>` (çıplak, `"..."`, `` `...` `` ya da

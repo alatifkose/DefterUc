@@ -2428,3 +2428,92 @@ def test_dongu_olmayan_hesaplama_ve_kendine_check_gecer() -> None:
     )
     assert m.tablo_olusturma_sql(tanim).startswith('CREATE TABLE "t"')
     assert m.sutun_ekleme_sql(_ekle("k", "INTEGER", "AS (kod * 2)", "CHECK (k > 0)"))
+
+
+# --- plan commit 3: CHECK önkoşulu sıraya girer; hesaplama döngüsüyle karıştırılmaz --
+
+D_CHECK = _ekle("d", "INTEGER", "CHECK (d > base)")
+
+
+def test_check_bagimliligi_iki_giris_sirasinda_ayni_sirayi_verir() -> None:
+    assert _sira(D_CHECK, BASE) == (BASE, D_CHECK)
+    assert _sira(BASE, D_CHECK) == (BASE, D_CHECK)
+    coklu = _ekle("d", "INTEGER", "CHECK (d > a)", "CHECK (d < b)")
+    a, b = _ekle("a", "INTEGER"), _ekle("b", "INTEGER")
+    assert _sira(coklu, b, a) == (b, a, coklu)
+    assert _sira(a, coklu, b) == (a, b, coklu)
+
+
+@pytest.mark.parametrize(
+    "isler", [(D_CHECK, BASE), (BASE, D_CHECK)], ids=["check,base", "base,check"]
+)
+def test_check_bagimli_paket_iki_sirada_da_uygulanir(
+    veritabani: vt.Veritabani, isler: tuple[m.YapiIsi, ...]
+) -> None:
+    _uygula(veritabani, T_ID)
+    with veritabani.islem() as oturum:
+        oturum.execute(text("INSERT INTO t (id) VALUES (1)"))
+    _uygula(veritabani, m.YapiPaketi(isler))
+    with veritabani.islem() as oturum:
+        adlar = [str(s[1]) for s in oturum.execute(text('PRAGMA table_xinfo("t")'))]
+        assert adlar == ["id", "base", "d"]
+        oturum.execute(text("UPDATE t SET base = 1, d = 5"))
+        with pytest.raises(Exception, match="CHECK"):
+            oturum.execute(text("UPDATE t SET d = 0"))
+
+
+def test_check_icinde_metin_islev_ve_kendi_sutunu_onkosul_degil() -> None:
+    metin = _ekle("d", "TEXT", "CHECK (d <> 'base')")
+    assert _sira(metin, BASE) == (metin, BASE)
+    islev = _ekle("e", "INTEGER", "CHECK (base(e) > 0)")
+    assert _sira(islev, BASE) == (islev, BASE)
+    kendi = _ekle("f", "INTEGER", "CHECK (f > 0 AND f < 10)")
+    assert _sira(kendi, BASE) == (kendi, BASE)
+    assert m.kisit_bagimliliklari(kendi.sutun) == frozenset()
+
+
+def test_check_ve_hesaplama_birbirini_beklerse_siralama_cozumsuz_hatasi() -> None:
+    a = _ekle("a", "INTEGER", "CHECK (a < b)")
+    b = _ekle("b", "INTEGER", "AS (a + 1)")
+    with pytest.raises(m.GecersizPaket, match="işlem sıralaması çözümsüz") as bilgi:
+        _sira(a, b)
+    assert "hesaplama döngüsü" not in str(bilgi.value)
+    assert "t.a" in str(bilgi.value) and "t.b" in str(bilgi.value)
+    with pytest.raises(m.GecersizPaket, match="çözümsüz"):
+        _sira(b, a)
+
+
+def test_ayni_yapi_tek_tablo_taniminda_kabul_edilir_ve_calisir(
+    veritabani: vt.Veritabani,
+) -> None:
+    tanim = m.TabloOlusturmaIstegi(
+        "u",
+        (
+            m.Sutun("id", ("INTEGER", "PRIMARY KEY")),
+            m.Sutun("a", ("INTEGER", "CHECK (a < b)")),
+            m.Sutun("b", ("INTEGER", "AS (a + 1)")),
+        ),
+    )
+    _uygula(veritabani, m.YapiPaketi((tanim,)))
+    with veritabani.islem() as oturum:
+        oturum.execute(text("INSERT INTO u (id, a) VALUES (1, 5)"))
+        assert oturum.execute(text("SELECT b FROM u")).scalar_one() == 6
+
+
+def test_karsilikli_references_dongusu_cozumsuz_sayilmaz() -> None:
+    a = m.TabloOlusturmaIstegi(
+        "a",
+        (
+            m.Sutun("id", ("INTEGER", "PRIMARY KEY")),
+            m.Sutun("b_id", ("INTEGER", "REFERENCES b(id)")),
+        ),
+    )
+    b = m.TabloOlusturmaIstegi(
+        "b",
+        (
+            m.Sutun("id", ("INTEGER", "PRIMARY KEY")),
+            m.Sutun("a_id", ("INTEGER", "REFERENCES a(id)")),
+        ),
+    )
+    assert set(_sira(a, b)) == {a, b}
+    assert set(_sira(b, a)) == {a, b}
