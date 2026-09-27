@@ -572,10 +572,18 @@ koşul reddedilir, koşulsuz güncelleme yoktur. `degerler` boş olamaz, sütun
 adları ad kuralından geçer; sistem tablosu adı daha bağlantı açılmadan ad
 kuralına takılır. Tek transaction: önce yazma kilidi (`yazma_kilidi_al`),
 sonra satır kimliği (`satir_kimligi`, okuma ve ekleme ile aynı sözleşme),
-sonra `UPDATE ... RETURNING <kimlik>`; kısıt ihlali (UNIQUE, yabancı anahtar,
-CHECK) hepsini geri alır. `beklenen` verilmişse koşula uyan satır sayısı
-birebir tutmalıdır, tutmazsa iş geri alınır ve `KayitHatasi` verir; Cowork
-tek satırı değiştirirken 1 verir. Koşul, SQLite yetkilendirme kancasıyla
+sonra `UPDATE OR ABORT ... RETURNING <kimlik>`; kısıt ihlali (UNIQUE, yabancı
+anahtar, CHECK) hepsini geri alır. **Tablonun kendi çakışma politikası
+güncellemede geçersizdir** (dış inceleme fe1059a B2): `OR ABORT` sütun ya da
+tablo düzeyindeki `ON CONFLICT IGNORE/REPLACE`'i bastırır. Düz `UPDATE` ile
+IGNORE çakışan satırı sessizce atlayıp kalanını yazıyor, REPLACE ise
+güncellenen satır uğruna başka bir satırı siliyordu; ikisi de "hiçbiri
+değişmez" sözünü ve `beklenen` sayımını bozuyordu (betikle doğrulandı, iki
+politika için testli). `beklenen` verilmişse koşula uyan satır sayısı
+birebir tutmalıdır, tutmazsa iş geri alınır ve `KayitHatasi` verir; artık
+hiçbir satır sessizce atlanmadığı için `RETURNING` sayısı gerçek eşleşme
+sayısıdır, ayrı sayım sorgusu yoktur (değişken koşul iki kez
+değerlendirilmez). Cowork tek satırı değiştirirken 1 verir. Koşul, SQLite yetkilendirme kancasıyla
 sınırlıdır (`yapi.YetkiKancasi` + `yapi.okuma_yetkisi`, okuma ile aynı
 kanca; ek olarak yalnız hedef tabloda `UPDATE` serbesttir): koşuldaki alt
 sorgu sistem tablolarına ve `sqlite_*`'a ulaşamaz, `load_extension`, PRAGMA,
@@ -927,7 +935,7 @@ Araçlar (2026-09-25; adları `ARACLAR`):
 | `yapiyi_oku` | Tablolar: ad, `CREATE TABLE` cümlesi, sütunlar (`table_xinfo`), indeksler (benzersizlik `PRAGMA index_list`'ten, SQL metninden değil), satır sayısı. Sistem tabloları (`_defteruc_*`) ve `sqlite_*` listede yoktur; önek karşılaştırmasında alt çizgi kaçırılır, `sqliteverileri` gibi kullanıcı tabloları görünür (dış inceleme 7dba285 bulgu 5 ve 6). | - |
 | `satir_ekle` | Mevcut tabloya satırlar yazar (kayıt); hepsi tek transaction, biri düşerse hiçbiri yazılmaz. Her satırın anahtarı yanıtta. | yok |
 | `satirlari_oku` | Koşul, parametre, sınır ve başlangıçla satır okur; koşula uyan toplam ve devamı olup olmadığı yanıtta. Yalnız okur, sistem tabloları alt sorgudan da kapalı. | - |
-| `satirlari_guncelle` | Var olan satırları koşulla değiştirir; `degerler` sütun → yeni değer, `beklenen` verilirse uyan satır sayısı tutmalı. Tek işlem; değişen satırların anahtarı yanıtta. Sistem tabloları değiştirilemez, koşuldan okunamaz. | yok |
+| `satirlari_guncelle` | Var olan satırları koşulla değiştirir; `degerler` sütun → yeni değer, `beklenen` verilirse uyan satır sayısı tutmalı. Tek işlem (`UPDATE OR ABORT`: tablonun IGNORE/REPLACE politikası geçersiz, çakışma hatadır); değişen satırların anahtarı yanıtta. Sistem tabloları değiştirilemez, koşuldan okunamaz. | yok |
 
 Yapı isteği araçları isteği uygulamaz: motorun SQL üretimiyle doğrular
 (geçersiz ad ya da parça araç hatasıdır), `BEKLIYOR` yazar ve yanıtta talep

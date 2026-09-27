@@ -647,3 +647,55 @@ def test_guncelleme_bilesik_anahtar_ve_ortuk_rowid_doner(
     n = kayit.satirlari_guncelle(veritabani, "n", "v = ?", ["eski"], {"v": "yeni"})
     assert n.anahtar_sutunlari == ("rowid",) and sorted(n.anahtarlar) == [(1,), (2,)]
     assert _satirlar(veritabani, "SELECT v FROM n") == [("yeni",), ("yeni",)]
+
+
+# --- inceleme fe1059a B2: tablonun çakışma politikası güncellemede geçersizdir -------
+
+
+def _politikali_tablo(v: vt.Veritabani, ad: str, politika: str) -> None:
+    _uygula(
+        v,
+        motor.TabloOlusturmaIstegi(
+            ad,
+            (
+                motor.Sutun("id", ("INTEGER", "PRIMARY KEY")),
+                motor.Sutun("v", ("TEXT", f"UNIQUE ON CONFLICT {politika}")),
+                motor.Sutun("flag", ("INTEGER",)),
+            ),
+        ),
+    )
+    kayit.satirlar_ekle(
+        v, ad, [{"id": 1, "v": "a", "flag": 0}, {"id": 2, "v": "b", "flag": 0}]
+    )
+
+
+def test_guncelleme_ignore_politikasinda_sessiz_atlama_yapmaz_beklenen_tutar(
+    veritabani: vt.Veritabani,
+) -> None:
+    _politikali_tablo(veritabani, "x", "IGNORE")
+    with pytest.raises(kayit.KayitHatasi, match="UNIQUE"):
+        kayit.satirlari_guncelle(
+            veritabani, "x", "id > ?", [0], {"v": "a", "flag": 1}, beklenen=1
+        )
+    with pytest.raises(kayit.KayitHatasi, match="UNIQUE"):
+        kayit.satirlari_guncelle(veritabani, "x", "id > ?", [0], {"v": "a", "flag": 1})
+    assert _satirlar(veritabani, "SELECT * FROM x ORDER BY id") == [
+        (1, "a", 0),
+        (2, "b", 0),
+    ]
+
+
+def test_guncelleme_replace_politikasinda_baska_satiri_silmez(
+    veritabani: vt.Veritabani,
+) -> None:
+    _politikali_tablo(veritabani, "y", "REPLACE")
+    with pytest.raises(kayit.KayitHatasi, match="UNIQUE"):
+        kayit.satirlari_guncelle(veritabani, "y", "id = ?", [1], {"v": "b"}, beklenen=1)
+    assert _satirlar(veritabani, "SELECT * FROM y ORDER BY id") == [
+        (1, "a", 0),
+        (2, "b", 0),
+    ]
+    sonuc = kayit.satirlari_guncelle(
+        veritabani, "y", "id = ?", [1], {"v": "c"}, beklenen=1
+    )
+    assert sonuc.guncellenen == 1 and sonuc.anahtarlar == ((1,),)

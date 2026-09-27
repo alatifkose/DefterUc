@@ -194,7 +194,9 @@ ARAC_SATIRLARI_GUNCELLE_ACIKLAMASI = (
     "parametreler listesinde); degerler: sütun adı → yeni değer sözlüğü (satir_ekle "
     "ile aynı değer biçimleri); beklenen: koşula uyması gereken satır sayısı, "
     "verilirse ve tutmazsa hiçbir satır değişmez (tek satır değiştirirken 1 ver). "
-    "Hepsi tek işlemde: biri kısıta takılırsa hiçbiri değişmez. Yanıt: "
+    "Hepsi tek işlemde: biri kısıta takılırsa hiçbiri değişmez; tablonun kendi "
+    "ON CONFLICT IGNORE/REPLACE kuralı güncellemede geçersizdir, çakışma her "
+    "zaman hatadır. Yanıt: "
     "guncellenen sayı ve değişen satırların anahtarları (satir_ekle ile aynı "
     "sözleşme). Sistem tabloları değiştirilemez, koşuldan da okunamaz."
 )

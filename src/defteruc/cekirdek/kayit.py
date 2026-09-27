@@ -85,7 +85,7 @@ def satirlari_guncelle(
                 anahtarlar = tuple(
                     tuple(s)
                     for s in baglanti.exec_driver_sql(
-                        f'UPDATE "{tablo}" SET {atama} WHERE {nerede} '
+                        f'UPDATE OR ABORT "{tablo}" SET {atama} WHERE {nerede} '
                         f"RETURNING {yapi.kimlik_secimi(kimlik)}",
                         baglananlar,
                     ).all()
