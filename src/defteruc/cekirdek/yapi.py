@@ -118,6 +118,32 @@ def yazma_kilidi_al(baglanti: Connection, tablo: str) -> None:
     baglanti.exec_driver_sql(f'DELETE FROM "{tablo}" WHERE 0')
 
 
+GUNCELLEYEN_EYLEMLER = frozenset({"CASCADE", "SET NULL", "SET DEFAULT"})
+
+
+def guncelleme_zinciri(baglanti: Connection, tablo: str) -> frozenset[str]:
+    tablolar = [
+        str(s[0])
+        for s in baglanti.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).all()
+        if not sistem_tablosu_mu(str(s[0]))
+    ]
+    cocuklar: dict[str, set[str]] = {}
+    for ad in tablolar:
+        for bag in baglanti.exec_driver_sql(f'PRAGMA foreign_key_list("{ad}")').all():
+            if str(bag[5]).upper() in GUNCELLEYEN_EYLEMLER:
+                cocuklar.setdefault(str(bag[2]).casefold(), set()).add(ad)
+    zincir = {tablo}
+    kuyruk = [tablo]
+    while kuyruk:
+        for cocuk in cocuklar.get(kuyruk.pop().casefold(), ()):
+            if cocuk not in zincir:
+                zincir.add(cocuk)
+                kuyruk.append(cocuk)
+    return frozenset(zincir)
+
+
 def kimlik_secimi(kimlik: Kimlik) -> str:
     if kimlik.ortuk:
         return kimlik.sutunlar[0]

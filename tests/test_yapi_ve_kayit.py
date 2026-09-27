@@ -1,3 +1,4 @@
+import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -763,3 +764,169 @@ def test_silme_zincirli_replace_tablosuna_cakismayan_ekleme_calisir(
     sonuc = kayit.satirlar_ekle(veritabani, "ana", [{"kod": "b"}])
     assert sonuc.eklenen == 1 and sonuc.anahtarlar == ((2,),)
     assert _satirlar(veritabani, "SELECT ana_id FROM alt") == [(1,)]
+
+
+# --- inceleme fe1059a B4: onaylı ON UPDATE zinciri güncellemede serbest -------------
+
+
+def _tablo(
+    ad: str, *sutunlar: tuple[str, tuple[str, ...]]
+) -> motor.TabloOlusturmaIstegi:
+    return motor.TabloOlusturmaIstegi(
+        ad, tuple(motor.Sutun(sad, ozellikler) for sad, ozellikler in sutunlar)
+    )
+
+
+def _zincir_hazirla(v: vt.Veritabani) -> None:
+    # p ← c (CASCADE, başvuru büyük harfle yazılmış) ← g (CASCADE, CHECK);
+    # p ← n (SET NULL); p ← r (RESTRICT); s kendine bağlı (CASCADE).
+    _uygula(v, _tablo("p", ("id", ("INTEGER", "PRIMARY KEY")), ("v", ("TEXT",))))
+    _uygula(
+        v,
+        _tablo(
+            "c",
+            ("p_id", ("INTEGER", "PRIMARY KEY", "REFERENCES P(id) ON UPDATE CASCADE")),
+        ),
+    )
+    _uygula(
+        v,
+        _tablo(
+            "g",
+            ("id", ("INTEGER", "PRIMARY KEY")),
+            (
+                "c_ref",
+                (
+                    "INTEGER",
+                    "REFERENCES c(p_id) ON UPDATE CASCADE",
+                    "CHECK (c_ref < 5)",
+                ),
+            ),
+        ),
+    )
+    _uygula(
+        v,
+        _tablo(
+            "n",
+            ("id", ("INTEGER", "PRIMARY KEY")),
+            ("p_id", ("INTEGER", "REFERENCES p(id) ON UPDATE SET NULL")),
+        ),
+    )
+    _uygula(
+        v,
+        _tablo(
+            "r",
+            ("id", ("INTEGER", "PRIMARY KEY")),
+            ("p_id", ("INTEGER", "REFERENCES p(id) ON UPDATE RESTRICT")),
+        ),
+    )
+    _uygula(
+        v,
+        _tablo(
+            "s",
+            ("id", ("INTEGER", "PRIMARY KEY")),
+            ("ust", ("INTEGER", "REFERENCES s(id) ON UPDATE CASCADE")),
+        ),
+    )
+    kayit.satirlar_ekle(v, "p", [{"id": 1, "v": "a"}])
+    kayit.satirlar_ekle(v, "c", [{"p_id": 1}])
+    kayit.satirlar_ekle(v, "g", [{"c_ref": 1}])
+    kayit.satirlar_ekle(v, "n", [{"p_id": 1}])
+
+
+def _zincir_durumu(v: vt.Veritabani) -> dict[str, list[tuple[object, ...]]]:
+    return {
+        "p": _satirlar(v, "SELECT id FROM p"),
+        "c": _satirlar(v, "SELECT p_id FROM c"),
+        "g": _satirlar(v, "SELECT id, c_ref FROM g"),
+        "n": _satirlar(v, "SELECT id, p_id FROM n"),
+    }
+
+
+BASLANGIC = {"p": [(1,)], "c": [(1,)], "g": [(1, 1)], "n": [(1, 1)]}
+
+
+def test_guncelleme_zinciri_yalniz_guncelleyen_baglari_toplar_ve_sonlanir(
+    veritabani: vt.Veritabani,
+) -> None:
+    _zincir_hazirla(veritabani)
+    _uygula(
+        veritabani,
+        motor.YapiPaketi(
+            (
+                _tablo(
+                    "a",
+                    ("id", ("INTEGER", "PRIMARY KEY")),
+                    ("b_id", ("INTEGER", "REFERENCES b(id) ON UPDATE CASCADE")),
+                ),
+                _tablo(
+                    "b",
+                    ("id", ("INTEGER", "PRIMARY KEY")),
+                    ("a_id", ("INTEGER", "REFERENCES a(id) ON UPDATE SET DEFAULT")),
+                ),
+            )
+        ),
+    )
+    with veritabani.islem() as oturum:
+        baglanti = oturum.connection()
+        assert yapi.guncelleme_zinciri(baglanti, "p") == frozenset({"p", "c", "g", "n"})
+        assert yapi.guncelleme_zinciri(baglanti, "c") == frozenset({"c", "g"})
+        assert yapi.guncelleme_zinciri(baglanti, "r") == frozenset({"r"})
+        assert yapi.guncelleme_zinciri(baglanti, "s") == frozenset({"s"})
+        assert yapi.guncelleme_zinciri(baglanti, "a") == frozenset({"a", "b"})
+        assert yapi.guncelleme_zinciri(baglanti, "b") == frozenset({"a", "b"})
+
+
+def test_cascade_ve_set_null_zinciri_tek_guncellemeyle_yurur(
+    veritabani: vt.Veritabani,
+) -> None:
+    _zincir_hazirla(veritabani)
+    sonuc = kayit.satirlari_guncelle(
+        veritabani, "p", "id = ?", [1], {"id": 2}, beklenen=1
+    )
+    assert sonuc.guncellenen == 1 and sonuc.anahtarlar == ((2,),)
+    assert _zincir_durumu(veritabani) == {
+        "p": [(2,)],
+        "c": [(2,)],
+        "g": [(1, 2)],
+        "n": [(1, None)],
+    }
+    kayit.satirlar_ekle(veritabani, "s", [{"id": 1}, {"id": 2, "ust": 1}])
+    kayit.satirlari_guncelle(veritabani, "s", "id = ?", [1], {"id": 7}, beklenen=1)
+    assert _satirlar(veritabani, "SELECT id, ust FROM s ORDER BY id") == [
+        (2, 7),
+        (7, None),
+    ]
+
+
+def test_zincir_sonunda_hata_ana_kayit_dahil_hepsini_geri_alir(
+    veritabani: vt.Veritabani,
+) -> None:
+    _zincir_hazirla(veritabani)
+    with pytest.raises(kayit.KayitHatasi, match="CHECK"):
+        kayit.satirlari_guncelle(veritabani, "p", "id = ?", [1], {"id": 9}, beklenen=1)
+    assert _zincir_durumu(veritabani) == BASLANGIC
+
+
+def test_restrict_bagi_zincire_girmez_ve_guncellemeyi_kisitla_durdurur(
+    veritabani: vt.Veritabani,
+) -> None:
+    _zincir_hazirla(veritabani)
+    kayit.satirlar_ekle(veritabani, "r", [{"p_id": 1}])
+    with pytest.raises(kayit.KayitHatasi, match="FOREIGN KEY"):
+        kayit.satirlari_guncelle(veritabani, "p", "id = ?", [1], {"id": 2}, beklenen=1)
+    assert _zincir_durumu(veritabani) == BASLANGIC
+    assert _satirlar(veritabani, "SELECT p_id FROM r") == [(1,)]
+
+
+def test_guncelleme_yetkisi_zincir_disini_ve_sistem_tablosunu_reddeder() -> None:
+    yetki = kayit.guncelleme_yetkisi(frozenset({"p", "c", onay.SISTEM_TABLOSU}))
+    assert yetki(sqlite3.SQLITE_UPDATE, "p", "id") == sqlite3.SQLITE_OK
+    assert yetki(sqlite3.SQLITE_UPDATE, "c", "p_id") == sqlite3.SQLITE_OK
+    assert yetki(sqlite3.SQLITE_UPDATE, "r", "p_id") == sqlite3.SQLITE_DENY
+    assert (
+        yetki(sqlite3.SQLITE_UPDATE, onay.SISTEM_TABLOSU, "durum")
+        == sqlite3.SQLITE_DENY
+    )
+    assert yetki(sqlite3.SQLITE_UPDATE, "sqlite_sequence", "seq") == sqlite3.SQLITE_DENY
+    assert yetki(sqlite3.SQLITE_DELETE, "p", None) == sqlite3.SQLITE_DENY
+    assert yetki(sqlite3.SQLITE_READ, "c", "p_id") == sqlite3.SQLITE_OK

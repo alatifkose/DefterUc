@@ -81,7 +81,8 @@ def satirlari_guncelle(
             baglanti = oturum.connection()
             yapi.yazma_kilidi_al(baglanti, tablo)
             kimlik = yapi.satir_kimligi(baglanti, tablo)
-            with yapi.YetkiKancasi(baglanti, _guncelleme_yetkisi(tablo)):
+            izinli = yapi.guncelleme_zinciri(baglanti, tablo)
+            with yapi.YetkiKancasi(baglanti, guncelleme_yetkisi(izinli)):
                 anahtarlar = tuple(
                     tuple(s)
                     for s in baglanti.exec_driver_sql(
@@ -113,10 +114,12 @@ def _yazma_hedefini_dogrula(tablo: str) -> None:
     adi_dogrula(tablo, "tablo")
 
 
-def _guncelleme_yetkisi(tablo: str) -> yapi.Yetki:
+def guncelleme_yetkisi(izinli: frozenset[str]) -> yapi.Yetki:
     def yetki(eylem: int, birinci: str | None, ikinci: str | None, *_: object) -> int:
         if eylem == sqlite3.SQLITE_UPDATE:
-            return sqlite3.SQLITE_OK if birinci == tablo else sqlite3.SQLITE_DENY
+            tablo = birinci or ""
+            serbest = tablo in izinli and not yapi.sistem_tablosu_mu(tablo)
+            return sqlite3.SQLITE_OK if serbest else sqlite3.SQLITE_DENY
         return yapi.okuma_yetkisi(eylem, birinci, ikinci)
 
     return yetki

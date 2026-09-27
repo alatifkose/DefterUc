@@ -586,10 +586,30 @@ hiçbir satır sessizce atlanmadığı için `RETURNING` sayısı gerçek eşle�
 sayısıdır, ayrı sayım sorgusu yoktur (değişken koşul iki kez
 değerlendirilmez). Cowork tek satırı değiştirirken 1 verir. Koşul, SQLite yetkilendirme kancasıyla
 sınırlıdır (`yapi.YetkiKancasi` + `yapi.okuma_yetkisi`, okuma ile aynı
-kanca; ek olarak yalnız hedef tabloda `UPDATE` serbesttir): koşuldaki alt
-sorgu sistem tablolarına ve `sqlite_*`'a ulaşamaz, `load_extension`, PRAGMA,
-ATTACH, silme ve başka tabloyu güncelleme yasaktır; kanca iş bitince
-kalkar, kalkamazsa bağlantı geçersizleştirilir. Davranış önce betikle
+kanca; ek olarak yalnız hedef tabloda ve onun **güncelleme zincirinde**
+`UPDATE` serbesttir): koşuldaki alt sorgu sistem tablolarına ve
+`sqlite_*`'a ulaşamaz, `load_extension`, PRAGMA, ATTACH, silme ve zincir
+dışı tabloyu güncelleme yasaktır; kanca iş bitince kalkar, kalkamazsa
+bağlantı geçersizleştirilir.
+
+**Güncelleme zinciri** (dış inceleme fe1059a B4; karar 2026-09-27,
+Abdüllatif: izin ver). Onaylanan şema `REFERENCES p(id) ON UPDATE CASCADE`
+(ya da `SET NULL`, `SET DEFAULT`) taşıyorsa `p`'nin anahtarı değişirken
+SQLite alt tabloda da `UPDATE` yapar ve kanca bunu doğrudan güncellemeden
+ayırt edemez (betikle doğrulandı: aynı eylem kodu, tetikleyici adı boş).
+Kanca eskiden yalnız hedef tabloya izin verdiği için geçerli zincirleme
+"not authorized" düşüyordu. Şimdi `yapi.guncelleme_zinciri(baglanti,
+tablo)` hedef tablodan başlayıp `PRAGMA foreign_key_list` ile ona
+güncelleyen eylemle (`CASCADE`, `SET NULL`, `SET DEFAULT`) bağlı tabloları
+zincirin sonuna kadar toplar; `NO ACTION` ve `RESTRICT` zincire girmez
+(SQLite onlarda alt tabloyu değiştirmez, kısıt hatası verir). Başvurulan
+ad PRAGMA'da yazıldığı gibi gelir (`REFERENCES P(id)`), karşılaştırma
+`casefold` ile yapılır. Kendine bağlanan ya da karşılıklı bağlanan
+tablolarda tarama ziyaret kümesiyle sonlanır. Kanca (`kayit.guncelleme_yetkisi`)
+yalnız bu kümedeki tablolara `UPDATE` verir; sistem tabloları kümede olsa
+bile kapalıdır, bütün tablolara körlemesine izin yoktur. Zincirin sonunda
+kısıt düşerse (alt tablonun CHECK'i) ana kayıt dahil hepsi geri alınır.
+Bunların her biri testlidir (`tests/test_yapi_ve_kayit.py`, B4 bölümü). Davranış önce betikle
 doğrulandı (`UPDATE ... RETURNING` rowid, bileşik anahtar ve sıfır eşleşme;
 kanca altında sistem tablosu alt sorgusu "prohibited", başka tablo, PRAGMA
 ve DELETE "not authorized"), sonra testle kanıtlandı
