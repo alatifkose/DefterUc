@@ -1066,6 +1066,75 @@ def _kisiler_tablosunu_ac(sunucu: Any, ayar: ay.Ayarlar) -> None:
         onaylayan.kapat()
 
 
+# --- inceleme 14061d3 B1: bilinmeyen alan sessizce düşmez, çağrı reddedilir --------
+
+
+def test_bilinmeyen_alan_araci_reddeder_ve_hicbir_sey_yapmaz(test_koku: Path) -> None:
+    ayar = ay.ayarlari_yukle()
+    ay.dizinleri_hazirla(ayar)
+    gunluk.gunlugu_kur(ayar.log_dizini)
+    sunucu = mcp_kapisi.sunucu_kur(ayar)
+    _kisiler_tablosunu_ac(sunucu, ayar)
+    _cagir(
+        sunucu,
+        mcp_kapisi.ARAC_SATIR_EKLE,
+        {"tablo": "kisiler", "satirlar": [{"ad_soyad": "Ayşe"}, {"ad_soyad": "Ali"}]},
+    )
+    hata = _hata(
+        sunucu,
+        mcp_kapisi.ARAC_SATIRLARI_GUNCELLE,
+        {
+            "tablo": "kisiler",
+            "kosul": "id >= 1",
+            "degerler": {"ad_soyad": "Değişti"},
+            "beklenenn": 1,
+        },
+    )
+    assert "beklenenn" in hata
+    okunan = _cagir(sunucu, mcp_kapisi.ARAC_SATIRLARI_OKU, {"tablo": "kisiler"})
+    assert okunan["satirlar"] == [[1, "Ayşe"], [2, "Ali"]]
+    hata = _hata(
+        sunucu,
+        mcp_kapisi.ARAC_TABLO_OLUSTURMA_ISTEGI,
+        {
+            "tablo": "u",
+            "sutunlar": [
+                {"ad": "id", "ozellikler": ["INTEGER PRIMARY KEY"]},
+                {"ad": "tutar", "ozellik": ["INTEGER", "NOT NULL"]},
+            ],
+        },
+    )
+    assert "ozellik" in hata
+    assert _cagir(sunucu, mcp_kapisi.ARAC_BEKLEYEN_ISTEKLER, {}) == {"istekler": []}
+    assert "satirlarr" in _hata(
+        sunucu, mcp_kapisi.ARAC_SATIR_EKLE, {"tablo": "kisiler", "satirlarr": []}
+    )
+    yanit = _cagir(
+        sunucu,
+        mcp_kapisi.ARAC_SATIRLARI_GUNCELLE,
+        {
+            "tablo": "kisiler",
+            "kosul": "id >= 1",
+            "degerler": {"ad_soyad": "Değişti"},
+            "beklenen": 2,
+        },
+    )
+    assert yanit["guncellenen"] == 2
+
+
+def test_her_aracin_girdi_semasi_bilinmeyen_alani_reddeder(test_koku: Path) -> None:
+    sunucu = mcp_kapisi.sunucu_kur(ay.ayarlari_yukle())
+    araclar = anyio.run(sunucu.list_tools)
+    assert [a.name for a in araclar] == list(mcp_kapisi.ARACLAR)
+    for arac in araclar:
+        assert arac.input_schema.get("additionalProperties") is False, arac.name
+    sema = {a.name: a.input_schema for a in araclar}[
+        mcp_kapisi.ARAC_TABLO_OLUSTURMA_ISTEGI
+    ]
+    sutun = sema["$defs"]["SutunGirdisi"]
+    assert sutun.get("additionalProperties") is False
+
+
 def test_satirlari_guncelle_araci_kosulla_gunceller_ve_anahtar_doner(
     test_koku: Path,
 ) -> None:

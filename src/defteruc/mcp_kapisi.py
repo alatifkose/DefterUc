@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import math
 import sys
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from importlib.metadata import PackageNotFoundError, version
 from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.server.mcpserver.tools import Tool
 from pydantic import BaseModel, ConfigDict, Field
 
 from defteruc import gunluk
@@ -239,6 +241,7 @@ def disari(deger: yapi.Deger) -> object:
 
 
 class SutunGirdisi(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     ad: str
     ozellikler: tuple[str, ...] = ()
 
@@ -396,12 +399,30 @@ def kayit_sozlugu(kayit_: onay.YapiIstegiKaydi) -> dict[str, object]:
     }
 
 
+def bilinmeyen_alani_yasakla(arac: Tool) -> Tool:
+    model = arac.fn_metadata.arg_model
+    model.model_config["extra"] = "forbid"
+    model.model_rebuild(force=True)
+    arac.parameters = model.model_json_schema(by_alias=True)
+    return arac
+
+
 def sunucu_kur(ayarlar: Ayarlar) -> MCPServer[None]:
-    sunucu: MCPServer[None] = MCPServer(
-        name=SUNUCU_ADI,
-        version=uygulama_surumu(),
-        instructions=SUNUCU_TALIMATI,
-    )
+    araclar: list[Tool] = []
+
+    def arac(
+        name: str, description: str
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        def kaydet(islev: Callable[..., Any]) -> Callable[..., Any]:
+            araclar.append(
+                bilinmeyen_alani_yasakla(
+                    Tool.from_function(islev, name=name, description=description)
+                )
+            )
+            return islev
+
+        return kaydet
+
     veritabani = Veritabani(ayarlar.veritabani_yolu)
 
     def istek_birak(istek: motor.YapiIstegi) -> dict[str, object]:
@@ -416,14 +437,12 @@ def sunucu_kur(ayarlar: Ayarlar) -> MCPServer[None]:
         )
         return kayit_sozlugu(kayit_)
 
-    @sunucu.tool(name=ARAC_SISTEM_DURUMU, description=ARAC_SISTEM_DURUMU_ACIKLAMASI)
+    @arac(name=ARAC_SISTEM_DURUMU, description=ARAC_SISTEM_DURUMU_ACIKLAMASI)
     def sistem_durumu_araci(baglam: Context[Any, Any]) -> SistemDurumu:
         gunluk.olay_kaydet(OLAY_MCP_EL_SIKISMA, el_sikisma_ozeti(baglam))
         return sistem_durumu(ayarlar)
 
-    @sunucu.tool(
-        name=ARAC_TABLO_OLUSTURMA_ISTEGI, description=ARAC_TABLO_OLUSTURMA_ACIKLAMASI
-    )
+    @arac(name=ARAC_TABLO_OLUSTURMA_ISTEGI, description=ARAC_TABLO_OLUSTURMA_ACIKLAMASI)
     def tablo_olusturma_istegi(
         tablo: str,
         sutunlar: tuple[SutunGirdisi, ...],
@@ -436,13 +455,11 @@ def sunucu_kur(ayarlar: Ayarlar) -> MCPServer[None]:
             )
         )
 
-    @sunucu.tool(
-        name=ARAC_SUTUN_EKLEME_ISTEGI, description=ARAC_SUTUN_EKLEME_ACIKLAMASI
-    )
+    @arac(name=ARAC_SUTUN_EKLEME_ISTEGI, description=ARAC_SUTUN_EKLEME_ACIKLAMASI)
     def sutun_ekleme_istegi(tablo: str, sutun: SutunGirdisi) -> dict[str, object]:
         return istek_birak(motor.SutunEklemeIstegi(tablo, sutun.sutun()))
 
-    @sunucu.tool(
+    @arac(
         name=ARAC_SUTUN_OZELLIGI_DEGISTIRME_ISTEGI,
         description=ARAC_SUTUN_OZELLIGI_DEGISTIRME_ACIKLAMASI,
     )
@@ -463,7 +480,7 @@ def sunucu_kur(ayarlar: Ayarlar) -> MCPServer[None]:
             )
         )
 
-    @sunucu.tool(
+    @arac(
         name=ARAC_INDEKS_OLUSTURMA_ISTEGI, description=ARAC_INDEKS_OLUSTURMA_ACIKLAMASI
     )
     def indeks_olusturma_istegi(
@@ -477,17 +494,15 @@ def sunucu_kur(ayarlar: Ayarlar) -> MCPServer[None]:
             motor.IndeksOlusturmaIstegi(indeks, tablo, sutunlar, benzersiz, kosul)
         )
 
-    @sunucu.tool(
-        name=ARAC_INDEKS_SILME_ISTEGI, description=ARAC_INDEKS_SILME_ACIKLAMASI
-    )
+    @arac(name=ARAC_INDEKS_SILME_ISTEGI, description=ARAC_INDEKS_SILME_ACIKLAMASI)
     def indeks_silme_istegi(indeks: str) -> dict[str, object]:
         return istek_birak(motor.IndeksSilmeIstegi(indeks))
 
-    @sunucu.tool(name=ARAC_YAPI_PAKETI_ISTEGI, description=ARAC_YAPI_PAKETI_ACIKLAMASI)
+    @arac(name=ARAC_YAPI_PAKETI_ISTEGI, description=ARAC_YAPI_PAKETI_ACIKLAMASI)
     def yapi_paketi_istegi(isler: tuple[PaketIsiGirdisi, ...]) -> dict[str, object]:
         return istek_birak(motor.YapiPaketi(tuple(is_.is_() for is_ in isler)))
 
-    @sunucu.tool(name=ARAC_ISTEK_DURUMU, description=ARAC_ISTEK_DURUMU_ACIKLAMASI)
+    @arac(name=ARAC_ISTEK_DURUMU, description=ARAC_ISTEK_DURUMU_ACIKLAMASI)
     def istek_durumu(talep_kimligi: int) -> dict[str, object]:
         try:
             onay.sistem_tablosunu_hazirla(veritabani)
@@ -495,9 +510,7 @@ def sunucu_kur(ayarlar: Ayarlar) -> MCPServer[None]:
         except (onay.OnayHatasi, VeritabaniMesgul) as hata:
             raise ToolError(str(hata)) from hata
 
-    @sunucu.tool(
-        name=ARAC_BEKLEYEN_ISTEKLER, description=ARAC_BEKLEYEN_ISTEKLER_ACIKLAMASI
-    )
+    @arac(name=ARAC_BEKLEYEN_ISTEKLER, description=ARAC_BEKLEYEN_ISTEKLER_ACIKLAMASI)
     def bekleyen_istekler() -> dict[str, object]:
         try:
             onay.sistem_tablosunu_hazirla(veritabani)
@@ -506,7 +519,7 @@ def sunucu_kur(ayarlar: Ayarlar) -> MCPServer[None]:
             raise ToolError(str(hata)) from hata
         return {"istekler": [kayit_sozlugu(k) for k in kayitlar]}
 
-    @sunucu.tool(name=ARAC_YAPIYI_OKU, description=ARAC_YAPIYI_OKU_ACIKLAMASI)
+    @arac(name=ARAC_YAPIYI_OKU, description=ARAC_YAPIYI_OKU_ACIKLAMASI)
     def yapiyi_oku() -> dict[str, object]:
         try:
             tablolar = yapi.yapiyi_oku(veritabani)
@@ -514,7 +527,7 @@ def sunucu_kur(ayarlar: Ayarlar) -> MCPServer[None]:
             raise ToolError(str(hata)) from hata
         return {"tablolar": [asdict(t) for t in tablolar]}
 
-    @sunucu.tool(name=ARAC_SATIR_EKLE, description=ARAC_SATIR_EKLE_ACIKLAMASI)
+    @arac(name=ARAC_SATIR_EKLE, description=ARAC_SATIR_EKLE_ACIKLAMASI)
     def satir_ekle(
         tablo: str, satirlar: tuple[dict[str, GirdiDegeri], ...]
     ) -> dict[str, object]:
@@ -534,7 +547,7 @@ def sunucu_kur(ayarlar: Ayarlar) -> MCPServer[None]:
             "anahtarlar": [[disari(d) for d in a] for a in sonuc.anahtarlar],
         }
 
-    @sunucu.tool(name=ARAC_SATIRLARI_OKU, description=ARAC_SATIRLARI_OKU_ACIKLAMASI)
+    @arac(name=ARAC_SATIRLARI_OKU, description=ARAC_SATIRLARI_OKU_ACIKLAMASI)
     def satirlari_oku(
         tablo: str,
         kosul: str = "",
@@ -565,9 +578,7 @@ def sunucu_kur(ayarlar: Ayarlar) -> MCPServer[None]:
             "devami_var": sonuc.devami_var,
         }
 
-    @sunucu.tool(
-        name=ARAC_SATIRLARI_GUNCELLE, description=ARAC_SATIRLARI_GUNCELLE_ACIKLAMASI
-    )
+    @arac(name=ARAC_SATIRLARI_GUNCELLE, description=ARAC_SATIRLARI_GUNCELLE_ACIKLAMASI)
     def satirlari_guncelle(
         tablo: str,
         kosul: str,
@@ -596,7 +607,12 @@ def sunucu_kur(ayarlar: Ayarlar) -> MCPServer[None]:
             "anahtarlar": [[disari(d) for d in a] for a in sonuc.anahtarlar],
         }
 
-    return sunucu
+    return MCPServer(
+        name=SUNUCU_ADI,
+        version=uygulama_surumu(),
+        instructions=SUNUCU_TALIMATI,
+        tools=araclar,
+    )
 
 
 def main() -> int:

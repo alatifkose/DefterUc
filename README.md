@@ -996,6 +996,19 @@ Araçlar (2026-09-25; adları `ARACLAR`):
 | `satirlari_oku` | Koşul, parametre, sınır ve başlangıçla satır okur; koşula uyan toplam ve devamı olup olmadığı yanıtta. Yalnız okur, sistem tabloları alt sorgudan da kapalı. | - |
 | `satirlari_guncelle` | Var olan satırları koşulla değiştirir; `degerler` sütun → yeni değer, `beklenen` verilirse uyan satır sayısı tutmalı. Tek işlem (`UPDATE OR ABORT`: tablonun IGNORE/REPLACE politikası geçersiz, çakışma hatadır); değişen satırların anahtarı yanıtta. Sistem tabloları değiştirilemez, koşuldan okunamaz. | yok |
 
+**Bilinmeyen alan reddedilir** (dış inceleme 14061d3 B1). SDK'nın araç
+argümanları için ürettiği model fazla alanı sessizce atıyordu: `beklenenn=1`
+yazan bir çağrı `beklenen` korumasız çalışıp iki satırı birden değiştirdi;
+`ozellikler` yerine `ozellik` yazılan sütun özelliksiz istek oldu.
+`sunucu_kur` araçları `Tool.from_function` ile kurar ve
+`bilinmeyen_alani_yasakla` her aracın argüman modelini `extra="forbid"` ile
+yeniden kurup girdi şemasını (`additionalProperties: false`) günceller; iç
+modeller (`SutunGirdisi` dahil) aynı ayarı taşır. Araç adları ve mevcut
+alanlar korunur; bilinmeyen alan artık araç hatasıdır ve hiçbir şey yapılmaz.
+Test, kurulumda değiştirilen modelin gerçek çağrıda kullanılan model olduğunu
+üç araçla gösterir (`beklenenn`, `ozellik`, `satirlarr`) ve her aracın
+şemasını denetler.
+
 Yapı isteği araçları isteği uygulamaz: motorun SQL üretimiyle doğrular
 (geçersiz ad ya da parça araç hatasıdır), `BEKLIYOR` yazar ve yanıtta talep
 kimliğini ve **çalışacak SQL cümlesini** döndürür. Onay uygulamanın kendi
