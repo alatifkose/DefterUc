@@ -9,7 +9,7 @@ from itertools import pairwise
 from sqlalchemy import Connection
 from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
-from defteruc.cekirdek import yapi
+from defteruc.cekirdek import ifade, yapi
 from defteruc.cekirdek.veritabani import Veritabani, YabanciAnahtarIhlali
 
 AD_BICIMI = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -191,6 +191,8 @@ def _sutun_tanimi(sutun: Sutun) -> str:
         _tirnakla(adi_dogrula(sutun.ad, "sütun")),
         *(parcayi_dogrula(p, "özellik parçası") for p in sutun.ozellikler),
     ]
+    hesaplama_bagimliliklari(sutun)
+    kisit_bagimliliklari(sutun)
     return " ".join(parcalar)
 
 
@@ -378,45 +380,37 @@ _BASVURU = re.compile(
     r"\bREFERENCES\s+(?:\"([^\"]+)\"|`([^`]+)`|\[([^\]]+)\]|([A-Za-z_][A-Za-z0-9_]*))",
     re.IGNORECASE,
 )
-_HESAPLAMA_BASI = re.compile(r"\bAS\s*\(", re.IGNORECASE)
-_TANIMLAYICI = re.compile(
-    r"\"([^\"]+)\"|`([^`]+)`|\[([^\]]+)\]|([A-Za-z_][A-Za-z0-9_]*)(\s*\()?"
-)
 
 
-def hesaplama_ifadesi(sutun: Sutun) -> str | None:
-    # Hesaplanan sütunun "AS ( ... )" parantezinin içi; metin sabitleri
-    # boşaltılmış. GENERATED ALWAYS AS (...) ve kısa AS (...) aynı biçimdir.
-    metin = _METIN_SABITI.sub("''", " ".join(sutun.ozellikler))
-    eslesme = _HESAPLAMA_BASI.search(metin)
-    if eslesme is None:
-        return None
-    bas = eslesme.end() - 1
-    derinlik = 0
-    for konum in range(bas, len(metin)):
-        if metin[konum] == "(":
-            derinlik += 1
-        elif metin[konum] == ")":
-            derinlik -= 1
-            if derinlik == 0:
-                return metin[bas + 1 : konum]
-    return metin[bas + 1 :]
+def sutun_ifadeleri(sutun: Sutun) -> ifade.SutunTanimiIfadeleri:
+    # Sütun tanımının AS ( ... ) hesaplaması ve CHECK ( ... ) kısıtları, sözdizimsel
+    # rolüyle okunur (cekirdek/ifade.py). Okunamayan tanım sessizce bağımlılıksız
+    # sayılmaz, parça hatasıdır.
+    try:
+        return ifade.sutun_tanimi_ifadeleri(sutun.ozellikler)
+    except ifade.IfadeOkunamadi as hata:
+        raise GecersizParca(f"{sutun.ad}: sütun tanımı okunamadı: {hata}") from None
 
 
-def hesaplamada_kullanilan_sutunlar(sutun: Sutun) -> frozenset[str]:
-    # Yalnız ifadenin içindeki tanımlayıcılar: tırnaklı adlar olduğu gibi,
-    # çıplak adlar "(" ile sürmüyorsa (işlev adı değilse). Metin sabitleri
-    # ifade alınırken boşaltıldı; başka tablo adı ya da REFERENCES buraya girmez.
-    ifade = hesaplama_ifadesi(sutun)
-    if ifade is None:
-        return frozenset()
+def _basvurular(sutun: Sutun, metin: str) -> frozenset[str]:
+    try:
+        return ifade.sutun_basvurulari(metin)
+    except ifade.IfadeOkunamadi as hata:
+        raise GecersizParca(f"{sutun.ad}: ifade okunamadı: {hata}") from None
+
+
+def hesaplama_bagimliliklari(sutun: Sutun) -> frozenset[str]:
+    # Hesaplanan sütunun ifadesinde sütun olarak okunan adlar (casefold).
+    hesaplama = sutun_ifadeleri(sutun).hesaplama
+    return frozenset() if hesaplama is None else _basvurular(sutun, hesaplama)
+
+
+def kisit_bagimliliklari(sutun: Sutun) -> frozenset[str]:
+    # CHECK kısıtlarında sütun olarak okunan adlar; sütunun kendisi dışarıda.
     adlar: set[str] = set()
-    for eslesme in _TANIMLAYICI.finditer(ifade):
-        tirnakli = eslesme.group(1) or eslesme.group(2) or eslesme.group(3)
-        if tirnakli:
-            adlar.add(tirnakli.casefold())
-        elif eslesme.group(5) is None:
-            adlar.add(eslesme.group(4).casefold())
+    for kisit in sutun_ifadeleri(sutun).kisitlar:
+        adlar |= _basvurular(sutun, kisit)
+    adlar.discard(sutun.ad.casefold())
     return frozenset(adlar)
 
 
@@ -492,7 +486,7 @@ def _once_gelir(a: YapiIsi, b: YapiIsi) -> bool:
         case SutunEklemeIstegi():
             if isinstance(b, SutunEklemeIstegi):
                 return b.tablo == a.tablo and (
-                    a.sutun.ad.casefold() in hesaplamada_kullanilan_sutunlar(b.sutun)
+                    a.sutun.ad.casefold() in hesaplama_bagimliliklari(b.sutun)
                 )
             return (
                 isinstance(b, SutunOzelligiDegistirmeIstegi | IndeksOlusturmaIstegi)

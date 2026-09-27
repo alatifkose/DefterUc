@@ -330,7 +330,7 @@ sırasında aynı sonucu verir; paket düşerse silinen indeks de geri gelir.
 ekleme aynı tabloya gidiyorsa ve birinin tanımı hesaplanan sütunsa
 (`GENERATED ALWAYS AS (ifade)` ya da kısa `AS (ifade)`), ifadede adı geçen
 sütunun eklemesi önce gelir. Bağımlılık yalnız o parantezin içinden okunur
-(`hesaplama_ifadesi`, `hesaplamada_kullanilan_sutunlar`): metin sabitleri
+(`cekirdek/ifade.py`; `sutun_ifadeleri`, `hesaplama_bagimliliklari`): metin sabitleri
 boşaltılır, tırnaklı adlar (`"base"`, `` `base` ``, `[base]`) olduğu gibi,
 çıplak adlar `(` ile sürmüyorsa (işlev adı değilse) alınır, iç içe parantez
 dengeyle izlenir; başka tablonun adı, `REFERENCES` hedefi ya da başka bir
@@ -1326,6 +1326,7 @@ src/defteruc/    uygulama paketi
     yapi.py         mevcut yapıyı okuma (tablolar, sütunlar, indeksler, satır sayısı); sistem tablosu sınırı, yetki kancası, güncelleme zinciri
     kayit.py        satır ekleme (kayıt) ve koşullu güncelleme: onaysız, tek transaction, anahtar döner
     okuma.py        satır okuma: koşul, sayfalama, yetkilendirme kancasıyla yalnız okuma
+    ifade.py        sütun tanımı ifade okuyucu: belirteçler, gerçek AS ve CHECK parantezleri, sütun başvuruları
     arsiv.py        gelen dizini sınırı, akışla SHA-256, içerik adresli atomik arşiv, bütünlük
   finans/         finansal domain; çekirdeği kullanabilir (boş)
 tests/            pytest testleri (test_mimari_sinir.py: çekirdek → finans yasağı ve finansal ad denetimi; test_arsiv.py: arşiv)

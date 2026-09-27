@@ -2312,3 +2312,61 @@ def test_hesaplanan_sutun_paketi_iki_sirada_da_uygulanir(
         assert adlar == ["id", "base", "derived"]
         oturum.execute(text("UPDATE t SET base = 21 WHERE id = 1"))
         assert oturum.execute(text("SELECT derived FROM t")).scalar_one() == 42
+
+
+# --- inceleme 1f5e2b1 madde 4: tür adı, sayı ve tırnaklı işlev yanlış döngü üretmez -
+
+
+@pytest.mark.parametrize(
+    ("ifade", "diger_ad"),
+    [
+        ("CAST(id AS INTEGER)", "integer"),
+        ("id * 1e3", "e3"),
+        ('"abs"(id)', "abs"),
+        ("kod COLLATE NOCASE", "nocase"),
+        ("CASE WHEN id > 0 THEN 1 ELSE 0 END", "end"),
+    ],
+    ids=["cast", "exponent", "quoted_function", "collate", "case"],
+)
+def test_gecerli_hesaplamalar_yanlislikla_dongu_sayilmaz_ve_uygulanir(
+    veritabani: vt.Veritabani, ifade: str, diger_ad: str
+) -> None:
+    _uygula(
+        veritabani,
+        m.TabloOlusturmaIstegi(
+            "t", (m.Sutun("id", ("INTEGER", "PRIMARY KEY")), m.Sutun("kod", ("TEXT",)))
+        ),
+    )
+    with veritabani.islem() as oturum:
+        oturum.execute(text("INSERT INTO t (id, kod) VALUES (3, 'k')"))
+    a = _ekle("a", "REAL", f"AS ({ifade})")
+    diger = _ekle(diger_ad, "REAL", "AS (a + 1)")
+    assert _sira(a, diger) == (a, diger)
+    assert _sira(diger, a) == (a, diger)
+    _uygula(veritabani, m.YapiPaketi((diger, a)))
+    with veritabani.islem() as oturum:
+        adlar = [str(s[1]) for s in oturum.execute(text('PRAGMA table_xinfo("t")'))]
+        assert adlar == ["id", "kod", "a", diger_ad]
+        esit = oturum.execute(text(f'SELECT "{diger_ad}" = a + 1 FROM t')).scalar_one()
+        assert esit == 1
+
+
+def test_okunamayan_sutun_tanimi_istek_yazilmadan_reddedilir() -> None:
+    with pytest.raises(m.GecersizParca, match="okunamadı"):
+        m.sutun_ekleme_sql(_ekle("d", "INTEGER", "AS (a # 2)"))
+    with pytest.raises(m.GecersizParca, match="okunamadı"):
+        m.tablo_olusturma_sql(
+            m.TabloOlusturmaIstegi("u", (m.Sutun("d", ("INTEGER", "CHECK (d @ 1)")),))
+        )
+
+
+def test_hesaplama_ve_kisit_bagimliliklari_ayri_okunur() -> None:
+    sutun = m.Sutun(
+        "d",
+        ("INTEGER", "CHECK (d > base AND d < ust)", "AS (CAST(kod AS INTEGER) * 1e3)"),
+    )
+    assert m.hesaplama_bagimliliklari(sutun) == frozenset({"kod"})
+    assert m.kisit_bagimliliklari(sutun) == frozenset({"base", "ust"})
+    assert m.hesaplama_bagimliliklari(m.Sutun("k", ("INTEGER", "AS (kod * 2)"))) == {
+        "kod"
+    }
