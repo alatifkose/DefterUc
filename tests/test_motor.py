@@ -2517,3 +2517,175 @@ def test_karsilikli_references_dongusu_cozumsuz_sayilmaz() -> None:
     )
     assert set(_sira(a, b)) == {a, b}
     assert set(_sira(b, a)) == {a, b}
+
+
+# --- plan commit 4: yeniden kurma ile eklemelerin sıralanması, aşamalı sütun listesi -
+
+
+def _yk(*adlar: str, **ozellik: tuple[str, ...]) -> m.SutunOzelligiDegistirmeIstegi:
+    return m.SutunOzelligiDegistirmeIstegi(
+        "t",
+        tuple(
+            m.Sutun(
+                ad,
+                ozellik.get(
+                    ad, ("INTEGER", "PRIMARY KEY") if ad == "id" else ("INTEGER",)
+                ),
+            )
+            for ad in adlar
+        ),
+    )
+
+
+def test_ekleme_yeniden_kurma_tanimindaysa_once_degilse_sonra_gelir() -> None:
+    a = _ekle("a", "INTEGER")
+    tanimda = _yk("id", "a")
+    tanimda_degil = _yk("id")
+    assert _sira(tanimda, a) == (a, tanimda)
+    assert _sira(a, tanimda) == (a, tanimda)
+    assert _sira(a, tanimda_degil) == (tanimda_degil, a)
+    assert _sira(tanimda_degil, a) == (tanimda_degil, a)
+    hesaplanan = _ekle("d", "INTEGER", "AS (base * 2)")
+    yk_base = _yk("id", "base", base=("INTEGER", "DEFAULT 0"))
+    assert _sira(hesaplanan, yk_base) == (yk_base, hesaplanan)
+
+
+def test_birden_fazla_ekleme_yeniden_kurmanin_bekledigi_sirayla_yazilir() -> None:
+    a, b = _ekle("a", "INTEGER"), _ekle("b", "INTEGER")
+    yk = _yk("id", "a", "b")
+    assert _sira(yk, b, a) == (a, b, yk)
+    assert _sira(b, a, yk) == (a, b, yk)
+    assert _sira(a, yk, b) == (a, b, yk)
+
+
+def test_zincir_bagimlilik_ve_iki_yeniden_kurma_tek_anlamli_siraya_gelir() -> None:
+    a = _ekle("a", "INTEGER")
+    c = _ekle("c", "INTEGER", "AS (a + 1)")
+    yk1 = _yk("id", "a", a=("INTEGER", "DEFAULT 1"))
+    assert _sira(c, yk1, a) == (a, yk1, c)
+    assert _sira(yk1, a, c) == (a, yk1, c)
+    b = _ekle("b", "INTEGER")
+    yk2 = _yk("id", "a", "b", b=("INTEGER", "DEFAULT 2"))
+    for giris in [(yk2, b, yk1, a), (a, yk1, b, yk2), (b, yk2, a, yk1)]:
+        assert _sira(*giris) == (a, yk1, b, yk2)
+
+
+def test_bagimsiz_iki_yeniden_kurma_verilen_sirayi_korur() -> None:
+    yk1 = _yk("id", "a", a=("INTEGER", "DEFAULT 1"))
+    yk2 = _yk("id", "a", a=("INTEGER", "DEFAULT 2"))
+    assert _sira(yk1, yk2) == (yk1, yk2)
+    assert _sira(yk2, yk1) == (yk2, yk1)
+
+
+def test_birlesik_paket_indeks_references_ve_yeniden_kurma_ile_siralanir() -> None:
+    sil = m.IndeksSilmeIstegi("ux_t")
+    yk = _yk("id", "a", a=("INTEGER", "DEFAULT 0"))
+    yeni = _ekle("yeni", "INTEGER")
+    ix = m.IndeksOlusturmaIstegi("ix_t_yeni", "t", ("yeni",))
+    bagli = m.TabloOlusturmaIstegi(
+        "u",
+        (
+            m.Sutun("id", ("INTEGER", "PRIMARY KEY")),
+            m.Sutun("t_id", ("INTEGER", "REFERENCES t(id)")),
+        ),
+    )
+    for giris in [
+        (ix, bagli, yeni, yk, sil),
+        (sil, yk, yeni, ix, bagli),
+        (yeni, ix, sil, bagli, yk),
+    ]:
+        sira = _sira(*giris)
+        k = {is_: i for i, is_ in enumerate(sira)}
+        assert k[sil] < k[yk] < k[yeni] < k[ix]
+        assert set(sira) == set(giris)
+
+
+def test_tanimdaki_ekleme_disarida_kalan_bagimliligi_beklerse_cozumsuz() -> None:
+    a = _ekle("a", "INTEGER", "AS (c + 1)")
+    c = _ekle("c", "INTEGER")
+    yk = _yk("id", "a")
+    with pytest.raises(m.GecersizPaket, match="işlem sıralaması çözümsüz") as bilgi:
+        _sira(a, c, yk)
+    assert "yeniden kurma" in str(bilgi.value) and "t.a ekleme" in str(bilgi.value)
+
+
+@pytest.mark.parametrize("ters", [False, True], ids=["yk,ekle", "ekle,yk"])
+def test_yeniden_kur_sonra_ekle_gercek_veritabaninda(
+    veritabani: vt.Veritabani, ters: bool
+) -> None:
+    _uygula(
+        veritabani,
+        m.TabloOlusturmaIstegi(
+            "t", (m.Sutun("id", ("INTEGER", "PRIMARY KEY")), BASE.sutun)
+        ),
+    )
+    with veritabani.islem() as oturum:
+        oturum.execute(text("INSERT INTO t (id) VALUES (1)"))
+    yk = _yk("id", "base", base=("INTEGER", "DEFAULT 0"))
+    isler = (DERIVED, yk) if ters else (yk, DERIVED)
+    _uygula(veritabani, m.YapiPaketi(isler))
+    with veritabani.islem() as oturum:
+        oturum.execute(text("UPDATE t SET base = 21"))
+        assert [tuple(s) for s in oturum.execute(text("SELECT * FROM t"))] == [
+            (1, 21, 42)
+        ]
+
+
+def test_ekle_sonra_yeniden_kur_ve_coklu_ekleme_gercek_veritabaninda(
+    veritabani: vt.Veritabani,
+) -> None:
+    _uygula(veritabani, T_ID)
+    a, b = _ekle("a", "INTEGER"), _ekle("b", "TEXT")
+    yk = _yk("id", "a", "b", a=("INTEGER", "DEFAULT 7"), b=("TEXT", "DEFAULT 'x'"))
+    _uygula(veritabani, m.YapiPaketi((yk, b, a)))
+    assert [s[0] for s in _sutunlar(veritabani, "t")] == ["id", "a", "b"]
+    assert _sutunlar(veritabani, "t")[1] == ("a", "INTEGER", 0, "7")
+
+
+def test_beklenen_sutun_yoksa_ve_eklenmiyorsa_uygulama_acikca_reddedilir(
+    veritabani: vt.Veritabani,
+) -> None:
+    _uygula(veritabani, T_ID)
+    yk = _yk("id", "base", "d", d=("INTEGER", "AS (base * 2)"))
+    d = _ekle("d", "INTEGER", "AS (base * 2)")
+    with pytest.raises(m.GecersizPaket) as bilgi:
+        _uygula(veritabani, m.YapiPaketi((yk, d)))
+    mesaj = str(bilgi.value)
+    assert "yeniden kurma" in mesaj and "'base'" in mesaj and "ekleme işi yok" in mesaj
+    assert "yeniden kurma yeni sütun sağlamaz" in mesaj
+    assert [s[0] for s in _sutunlar(veritabani, "t")] == ["id"]
+
+
+def test_ayni_sutunun_ekleme_ve_yeniden_kurmada_bulunmasi_celiski_degil(
+    veritabani: vt.Veritabani,
+) -> None:
+    _uygula(veritabani, T_ID)
+    kisa = _ekle("kisa_ad", "TEXT")
+    yk = _yk("id", "kisa_ad", kisa_ad=("TEXT", "DEFAULT ''"))
+    with veritabani.islem() as oturum:
+        baglanti = oturum.connection()
+        m.paketi_dogrula_baglantida(baglanti, m.YapiPaketi((yk, kisa)))
+    _uygula(veritabani, m.YapiPaketi((yk, kisa)))
+    assert _sutunlar(veritabani, "t")[1] == ("kisa_ad", "TEXT", 0, "''")
+
+
+def test_bagli_on_denetim_zaten_var_olan_sutunu_ve_tabloyu_yakalar(
+    veritabani: vt.Veritabani,
+) -> None:
+    _uygula(
+        veritabani,
+        m.TabloOlusturmaIstegi(
+            "t", (m.Sutun("id", ("INTEGER", "PRIMARY KEY")), BASE.sutun)
+        ),
+    )
+    with veritabani.islem() as oturum:
+        baglanti = oturum.connection()
+        with pytest.raises(m.GecersizPaket, match="zaten var"):
+            m.paketi_dogrula_baglantida(baglanti, m.YapiPaketi((BASE,)))
+        with pytest.raises(m.GecersizPaket, match="tablo zaten var"):
+            m.paketi_dogrula_baglantida(baglanti, m.YapiPaketi((T_ID,)))
+        # Şemada olmayan, pakette kurulmayan tablo bilinmez sayılır: denetlenmez.
+        m.paketi_dogrula_baglantida(
+            baglanti,
+            m.YapiPaketi((m.SutunEklemeIstegi("yok", m.Sutun("a", ("INTEGER",))),)),
+        )

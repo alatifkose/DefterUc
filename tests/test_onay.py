@@ -861,3 +861,54 @@ def test_tablo_tanimindaki_dongu_istek_birakilmadan_reddedilir(
         onay.istek_birak(veritabani, istek)
     assert onay.bekleyenler(veritabani) == ()
     assert "t" not in _tablolar(veritabani)
+
+
+# --- plan commit 4: bağlantılı ön denetim istek bırakma, listeleme ve onayda ----------
+
+
+def _ekle_k(ad: str, *oz: str) -> m.SutunEklemeIstegi:
+    return m.SutunEklemeIstegi("kisiler", m.Sutun(ad, oz))
+
+
+def test_yeniden_kurmanin_bekledigi_eksik_sutun_istek_birakilmadan_reddedilir(
+    veritabani: vt.Veritabani,
+) -> None:
+    _gorup_onayla(veritabani, onay.istek_birak(veritabani, KISILER))
+    yk = m.SutunOzelligiDegistirmeIstegi(
+        "kisiler",
+        (
+            m.Sutun("id", ("INTEGER", "PRIMARY KEY")),
+            m.Sutun("ad_soyad", ("TEXT",)),
+            m.Sutun("puan", ("INTEGER",)),
+        ),
+    )
+    with pytest.raises(m.GecersizPaket, match="ekleme işi yok"):
+        onay.istek_birak(veritabani, m.YapiPaketi((yk,)))
+    assert onay.bekleyenler(veritabani) == ()
+    # Eksik sütun için ekleme işi eklenince aynı paket kabul edilir ve uygulanır.
+    kimlik = onay.istek_birak(
+        veritabani, m.YapiPaketi((yk, _ekle_k("puan", "INTEGER")))
+    )
+    kayit = _gorup_onayla(veritabani, kimlik)
+    assert kayit.durum is onay.Durum.UYGULANDI
+    assert _sutun_turleri(veritabani, "kisiler") == {
+        "id": "INTEGER",
+        "ad_soyad": "TEXT",
+        "puan": "INTEGER",
+    }
+
+
+def test_bekleyen_paket_semayla_gecersizlesirse_listelenir_ve_onay_uygulanamadi_olur(
+    veritabani: vt.Veritabani,
+) -> None:
+    _gorup_onayla(veritabani, onay.istek_birak(veritabani, KISILER))
+    kimlik = onay.istek_birak(veritabani, m.YapiPaketi((_ekle_k("puan", "INTEGER"),)))
+    # Bu arada aynı sütun başka yoldan eklendi: bekleyen paket artık uygulanamaz.
+    _gorup_onayla(veritabani, onay.istek_birak(veritabani, _ekle_k("puan", "REAL")))
+    (bekleyen,) = onay.bekleyenler(veritabani)
+    assert bekleyen.kimlik == kimlik
+    assert m.UYGULANAMAZ_ONEKI in bekleyen.sql and "zaten var" in bekleyen.sql
+    kayit = _gorup_onayla(veritabani, kimlik)
+    assert kayit.durum is onay.Durum.UYGULANAMADI
+    assert "zaten var" in (kayit.sonuc or "")
+    assert _sutun_turleri(veritabani, "kisiler")["puan"] == "REAL"

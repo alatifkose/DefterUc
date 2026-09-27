@@ -315,9 +315,11 @@ geçerli olmalıdır (ad ve parça kuralı). **Sıra** (`paketi_sirala`) yalnız
 paketin kendi üyeleri arasında çözülür, veritabanına bakılmaz: tabloyu
 kuran iş o tabloya dokunan her işten (sütun ekleme, sütun özelliği
 değiştirme, indeks) ve o tabloya `REFERENCES` ile başvuran her işten önce
-gelir; sütun ekleme aynı tablonun yeniden kurulmasından ve indeksinden,
-yeniden kurma indeksinden, indeks silme aynı adlı indeks oluşturmadan **ve
-paketteki her yeniden kurmadan** önce gelir. Son kural dış inceleme fe1059a
+gelir; sütun ekleme aynı tablonun indeksinden, yeniden kurma indeksinden,
+indeks silme aynı adlı indeks oluşturmadan **ve paketteki her yeniden
+kurmadan** önce gelir; sütun ekleme ile aynı tablonun yeniden kurulması
+arasındaki sıra ise eklenen sütunun yeni tanımda geçip geçmediğine bağlıdır
+(aşağıda "Yeniden kurma ile eklemelerin sıralanması"). Son kural dış inceleme fe1059a
 B5 ile geldi: yeniden kurma tablonun mevcut indekslerini geri kurar; silinecek
 benzersiz indeks henüz duruyorsa dönüştürülen değerler (`'01'` ve `'1'` →
 `1`, `1`) orada çakışır ve paket düşerdi, ters sırada verilince geçerdi.
@@ -361,14 +363,51 @@ mevcut ve yeni sütunlar arasında döngü oluşamaz. Eskiden SQLite `a AS (a+1)
 eklemesini kabul ediyor, hatayı ilk satırda "generated column loop" diye
 veriyordu; onaydan geçen yapı kalıcı oluyordu.
 
-**Bilinen sınır** (teslim öncesi kırma
-turunda bulundu, karar bekliyor): hesaplanan sütun eklemesi, aynı paketteki
-**yeniden kurmanın** tanımladığı bir sütuna dayanıyorsa paket düşer, çünkü
-sütun ekleme kuralı gereği yeniden kurmadan önce gelir ("no such column").
-Çözüm yolu: hesaplanan sütunu yeniden kurma tanımının içine koymak. Sıralayıcı
-bu bağı çözmüyor; çözmesi istenirse ayrı iş. İkinci sınır: kapsam kararı
-gereği yalnız hesaplanan sütun ifadesi okunur; `CHECK (d > base)` gibi bir
-kısıt da aynı pakette eklenen `base`'e dayanabilir ve SQLite bunu da "no such
+**Yeniden kurma ile eklemelerin sıralanması** (plan commit 4, dış inceleme
+1f5e2b1 madde 1). Eski kural sütun eklemeyi her zaman yeniden kurmanın önüne
+alıyordu; yeniden kurma tanımı eklenen sütunu içermiyorsa `SutunlarUyusmuyor`
+ile düşüyordu, tanım içermeyen ama sonra eklenmesi gereken sütun için de
+"no such column". Yeniden kurma **yeni sütun sağlamaz**: yalnız mevcut
+sütunları aynı ad ve sırayla yeniden tanımlar; bu yüzden "hesaplanan sütunu
+yeniden kurma tanımına koy" bir çözüm değildi (denetimcinin düzeltmesi).
+Şimdi `_sutun_onkosulu` şu kenarları kurar: eklenen sütun yeniden kurma
+tanımında geçiyorsa ekleme önce ("ekle, sonra özelliğini değiştir"),
+geçmiyorsa yeniden kurma önce ("özelliği değiştir, sonra yeni sütunu
+ekle"); aynı tanımda geçen birden fazla ekleme tanımdaki sırayla yazılır
+(yeniden kurma listeyi sırasıyla birebir bekler: tanım `id, a, b` iken
+eklemeler `b, a` verilse sıra `a, b` olur). Kural sıradan ve hesaplanan
+sütunlara aynı uygulanır; iki yeniden kurma arasında bağımsız değişikliklerin
+giriş sırası korunur, niyet tahmin edilmez; bağımlılıklar tek anlamlıysa
+farklı girişler aynı sonuca ulaşır (testli: zincir `a → yk1 → b → yk2` üç
+girişten). Sıra veritabanına bakmadan, paketin kendi üyelerinden çözülür;
+böylece istek doğrulaması, önizleme, özet ve uygulama aynı sırayı üretir.
+Önkoşullar birbirini beklerse (`a AS (c+1)` tanımda, `c` tanımda değil:
+`a` yeniden kurmadan önce, yeniden kurma `c`'den önce, `c` `a`'dan önce)
+`GecersizPaket` hangi işin hangi sütunu ya da sırayı beklediğini yazar,
+döngü kırılıp devam edilmez.
+
+**Bağlantılı ön denetim** (`paketi_dogrula_baglantida`): sıralanmış işler
+mevcut şemadan başlayan bir sütun listesi üzerinde izlenir (tablo kurma
+listeyi tanımla başlatır, ekleme sona ekler, yeniden kurma listenin o
+aşamadaki hâliyle sıra dahil birebir eşleşmeli). Uyuşmazlıkta hata, aşamayı
+ve işi numarasıyla yazar: bu aşamadaki sütunlar, tanımın beklediği sütunlar,
+eksik sütun için "pakette ekleme işi yok" ya da "daha sonra ekleniyor;
+yeniden kurma yeni sütun sağlamaz", fazla sütun, sıra farkı. Zaten var olan
+sütun ya da tablo da kesin hata sayılır. Şemada olmayan ve pakette kurulmayan
+tablo bilinmez sayılır ve denetlenmez: paket dışındaki bekleyen istek onu
+kurabilir, o davranış korunur. Denetim üç yerde çalışır: `onay.istek_birak`
+paketi yazmadan önce (kesin hata sistem tablosuna girmez), `bekleyenler`
+listelenirken paket önizlemesi yeniden üretilir ve paket bu arada şemayla
+geçersizleştiyse metnin sonuna `-- UYGULANAMAZ: ...` satırı eklenir
+(listeleme istisnayla bozulmaz), onayda `uygula_baglantida` güncel şemayla
+yeniden denetler ve hata `UYGULANAMADI` sebebi olur. Testli: yeniden kur →
+ekle ve ekle → yeniden kur gerçek veritabanında, çoklu ekleme, iki yeniden
+kurma, indeks silme/oluşturma ve `REFERENCES` ile birleşik paket, eksik
+sütunlu paketin istek bırakılmadan reddi ve ekleme işi eklenince kabulü,
+bekleyen paketin şemayla geçersizleşip listelenmesi ve `UYGULANAMADI` olması.
+
+**CHECK önkoşulu** (dış inceleme 1f5e2b1 madde 2): `CHECK (d > base)` gibi
+bir kısıt da aynı pakette eklenen `base`'e dayanabilir ve SQLite bunu "no such
 column" ile reddeder (betikle doğrulandı). **Kapandı (plan commit 3):**
 sütun düzeyi **yapısal önkoşul** (`_sutun_onkosulu`) hesaplama ifadesi ve
 CHECK kısıtlarından birlikte okunur; `d CHECK (d > base)` ile `base`

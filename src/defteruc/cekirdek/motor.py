@@ -102,6 +102,8 @@ class YapiPaketi:
 
 type YapiIstegi = YapiIsi | YapiPaketi
 
+UYGULANAMAZ_ONEKI = "-- UYGULANAMAZ: "
+
 
 # --- ad ve parça sınırı: SQL'e güvenle yazılabilmek için ---------------------------
 
@@ -406,6 +408,7 @@ def uygula_baglantida(baglanti: Connection, istek: YapiIstegi) -> None:
             case IndeksSilmeIstegi():
                 baglanti.exec_driver_sql(indeks_silme_sql(istek))
             case YapiPaketi():
+                paketi_dogrula_baglantida(baglanti, istek)
                 for is_ in paketi_sirala(istek):
                     uygula_baglantida(baglanti, is_)
     except SQLAlchemyError as hata:
@@ -467,7 +470,12 @@ def paketi_sirala(paket: YapiPaketi) -> tuple[YapiIsi, ...]:
     _hesaplama_dongusunu_reddet(isler)
     _onkosul_dongusunu_reddet(isler)
     oncekiler = [
-        [b for b, diger in enumerate(isler) if b != s and _once_gelir(diger, is_)]
+        [
+            b
+            for b, diger in enumerate(isler)
+            if b != s
+            and (_once_gelir(diger, is_) or _sutun_onkosulu(diger, is_, isler))
+        ]
         for s, is_ in enumerate(isler)
     ]
     sirali: list[int] = []
@@ -498,42 +506,89 @@ def _hesaplama_dongusunu_reddet(isler: tuple[YapiIsi, ...]) -> None:
         hesaplama_dongusunu_denetle(tablo, sutunlar)
 
 
-def _sutun_onkosulu(a: YapiIsi, b: YapiIsi) -> bool:
-    # Sütun düzeyi yapısal önkoşul: b işi çalışabilmek için a'nın eklediği sütuna
-    # ihtiyaç duyuyorsa (hesaplama ifadesi ya da CHECK kısıtı) a önce gelir.
-    # CHECK'in kendi sütununa başvurması önkoşul değildir; sütun kendi ADD'iyle oluşur.
-    if not (isinstance(a, SutunEklemeIstegi) and isinstance(b, SutunEklemeIstegi)):
+type SutunIsi = SutunEklemeIstegi | SutunOzelligiDegistirmeIstegi
+
+
+def _tanim_adlari(is_: SutunOzelligiDegistirmeIstegi) -> tuple[str, ...]:
+    return tuple(s.ad.casefold() for s in is_.sutunlar)
+
+
+def _sutun_onkosulu(a: YapiIsi, b: YapiIsi, isler: tuple[YapiIsi, ...] = ()) -> bool:
+    # Sütun düzeyi yapısal önkoşul, aynı tabloda:
+    # - ekleme → ekleme: b'nin hesaplama ifadesi ya da CHECK'i a'nın sütununu
+    #   kullanıyorsa a önce (kendi sütununa başvuru önkoşul değildir); ikisi de bir
+    #   yeniden kurma tanımında geçiyorsa tanımdaki sıra korunur (liste birebir
+    #   eşleşmeli).
+    # - ekleme → yeniden kurma: eklenen sütun yeni tanımda varsa ekleme önce.
+    # - yeniden kurma → ekleme: eklenen sütun yeni tanımda yoksa yeniden kurma önce.
+    # Yeniden kurma yeni sütun sağlamaz; eksik sütun bağlantılı ön denetimde çıkar.
+    if not isinstance(a, SutunEklemeIstegi | SutunOzelligiDegistirmeIstegi):
         return False
-    if a.tablo != b.tablo:
+    if not isinstance(b, SutunEklemeIstegi | SutunOzelligiDegistirmeIstegi):
         return False
-    gereken = hesaplama_bagimliliklari(b.sutun) | kisit_bagimliliklari(b.sutun)
-    return a.sutun.ad.casefold() in gereken
+    if a.tablo != b.tablo or a is b:
+        return False
+    match (a, b):
+        case (SutunEklemeIstegi(), SutunEklemeIstegi()):
+            gereken = hesaplama_bagimliliklari(b.sutun) | kisit_bagimliliklari(b.sutun)
+            if a.sutun.ad.casefold() in gereken:
+                return True
+            for is_ in isler:
+                if (
+                    isinstance(is_, SutunOzelligiDegistirmeIstegi)
+                    and is_.tablo == a.tablo
+                ):
+                    adlar = _tanim_adlari(is_)
+                    aa, bb = a.sutun.ad.casefold(), b.sutun.ad.casefold()
+                    if (
+                        aa in adlar
+                        and bb in adlar
+                        and adlar.index(aa) < adlar.index(bb)
+                    ):
+                        return True
+            return False
+        case (SutunEklemeIstegi(), SutunOzelligiDegistirmeIstegi()):
+            return a.sutun.ad.casefold() in _tanim_adlari(b)
+        case (SutunOzelligiDegistirmeIstegi(), SutunEklemeIstegi()):
+            return b.sutun.ad.casefold() not in _tanim_adlari(a)
+        case _:
+            return False
+
+
+def _is_etiketi(is_: SutunIsi) -> str:
+    if isinstance(is_, SutunEklemeIstegi):
+        return f"{is_.tablo}.{is_.sutun.ad} ekleme"
+    return f"{is_.tablo} yeniden kurma [{', '.join(s.ad for s in is_.sutunlar)}]"
 
 
 def _onkosul_dongusunu_reddet(isler: tuple[YapiIsi, ...]) -> None:
-    # Sütun önkoşulları (AS + CHECK) birbirini beklerse hiçbir ADD sırası çalışmaz.
-    # Bu hesaplama döngüsü değil, işlem sıralaması çözümsüzlüğüdür; açık hata verir.
+    # Sütun önkoşulları birbirini beklerse hiçbir sıra çalışmaz. Bu hesaplama
+    # döngüsü değil, işlem sıralaması çözümsüzlüğüdür; hangi işin hangi sütunu ya
+    # da sırayı beklediği yazılır, döngü sessizce kırılıp devam edilmez.
     # Tablolar arası REFERENCES döngüsü buraya girmez, o kurulabilir.
-    isler_ = [is_ for is_ in isler if isinstance(is_, SutunEklemeIstegi)]
+    isler_: list[SutunIsi] = [
+        is_
+        for is_ in isler
+        if isinstance(is_, SutunEklemeIstegi | SutunOzelligiDegistirmeIstegi)
+    ]
     durum: dict[int, str] = {}
-    yol: list[SutunEklemeIstegi] = []
+    yol: list[SutunIsi] = []
 
-    def gez(s: SutunEklemeIstegi) -> None:
+    def gez(s: SutunIsi) -> None:
         durum[id(s)] = "yolda"
         yol.append(s)
         for d in isler_:
-            if d is s or not _sutun_onkosulu(d, s):
+            if d is s or not _sutun_onkosulu(d, s, isler):
                 continue
             if durum.get(id(d)) == "yolda":
                 bas = next(i for i, y in enumerate(yol) if y is d)
-                zincir = [f"{y.tablo}.{y.sutun.ad}" for y in yol[bas:]] + [
-                    f"{d.tablo}.{d.sutun.ad}"
-                ]
+                zincir = [_is_etiketi(y) for y in yol[bas:]] + [_is_etiketi(d)]
                 raise GecersizPaket(
-                    "işlem sıralaması çözümsüz: sütun eklemeleri birbirinin sütununu "
-                    "bekliyor (" + " ← ".join(zincir) + "); ayrı ADD COLUMN "
-                    "işleriyle hiçbir sırada kurulamaz. Aynı yapı tek tablo "
-                    "tanımında verilebilir."
+                    "işlem sıralaması çözümsüz: işler birbirinin sütununu ya da "
+                    "sırasını bekliyor (" + " ← ".join(zincir) + "); bu işler "
+                    "hiçbir sırada birlikte uygulanamaz. Hesaplanan ve kısıtlı "
+                    "sütunlar tek tablo tanımında verilebilir; yeniden kurma yeni "
+                    "sütun sağlamaz."
                 )
             if id(d) not in durum:
                 gez(d)
@@ -545,17 +600,83 @@ def _onkosul_dongusunu_reddet(isler: tuple[YapiIsi, ...]) -> None:
             gez(s)
 
 
+def paketi_dogrula_baglantida(baglanti: Connection, paket: YapiPaketi) -> None:
+    # Bağlantılı ön denetim: mevcut şemadan başlayıp sıralı işleri sütun listesi
+    # üzerinde izler. Yeniden kurma listenin o aşamadaki hâliyle (sıra dahil)
+    # birebir eşleşmeli; eksik sütun için pakette ekleme işi yoksa bu açıkça
+    # söylenir. Şemada olmayan ve pakette kurulmayan tablo bilinmez sayılır ve
+    # denetlenmez (paket dışındaki bekleyen istek onu kurabilir). Aynı denetim
+    # uygulama öncesinde güncel şemayla yeniden çalışır.
+    sirali = paketi_sirala(paket)
+    listeler: dict[str, list[str] | None] = {}
+    for is_ in sirali:
+        tablo = _dokunulan_tablo(is_)
+        if tablo is not None and tablo not in listeler:
+            mevcut = _sutun_bilgisi(baglanti, tablo)
+            listeler[tablo] = [ad.casefold() for ad in mevcut] if mevcut else None
+    eklenenler = {
+        (is_.tablo, is_.sutun.ad.casefold())
+        for is_ in sirali
+        if isinstance(is_, SutunEklemeIstegi)
+    }
+    for n, is_ in enumerate(sirali, 1):
+        match is_:
+            case TabloOlusturmaIstegi():
+                if listeler.get(is_.tablo) is not None:
+                    raise GecersizPaket(
+                        f"{n}) {is_.tablo}: tablo zaten var; paket kuramaz"
+                    )
+                listeler[is_.tablo] = [s.ad.casefold() for s in is_.sutunlar]
+            case SutunEklemeIstegi():
+                liste = listeler.get(is_.tablo)
+                if liste is None:
+                    continue
+                ad = is_.sutun.ad.casefold()
+                if ad in liste:
+                    raise GecersizPaket(
+                        f"{n}) {is_.tablo}.{is_.sutun.ad} ekleme: sütun bu aşamada "
+                        f"zaten var (sütunlar {liste})"
+                    )
+                liste.append(ad)
+            case SutunOzelligiDegistirmeIstegi():
+                liste = listeler.get(is_.tablo)
+                if liste is None:
+                    continue
+                istenen = list(_tanim_adlari(is_))
+                if istenen == liste:
+                    continue
+                eksik = [a for a in istenen if a not in liste]
+                fazla = [a for a in liste if a not in istenen]
+                parcalar = [
+                    f"{n}) {is_.tablo} yeniden kurma: bu aşamada sütunlar {liste}, "
+                    f"tanım {istenen} bekliyor"
+                ]
+                for a in eksik:
+                    if (is_.tablo, a) in eklenenler:
+                        parcalar.append(
+                            f"eksik {a!r} pakette daha sonra ekleniyor; yeniden kurma "
+                            "yeni sütun sağlamaz"
+                        )
+                    else:
+                        parcalar.append(
+                            f"eksik {a!r} için pakette ekleme işi yok; yeniden kurma "
+                            "yeni sütun sağlamaz"
+                        )
+                if fazla:
+                    parcalar.append(f"tanımda olmayan mevcut sütunlar {fazla}")
+                if not eksik and not fazla:
+                    parcalar.append("sıra farklı")
+                raise GecersizPaket("; ".join(parcalar))
+            case _:
+                continue
+
+
 def _once_gelir(a: YapiIsi, b: YapiIsi) -> bool:
     match a:
         case TabloOlusturmaIstegi():
             return a.tablo == _dokunulan_tablo(b) or a.tablo in _basvurulan_tablolar(b)
         case SutunEklemeIstegi():
-            if isinstance(b, SutunEklemeIstegi):
-                return _sutun_onkosulu(a, b)
-            return (
-                isinstance(b, SutunOzelligiDegistirmeIstegi | IndeksOlusturmaIstegi)
-                and b.tablo == a.tablo
-            )
+            return isinstance(b, IndeksOlusturmaIstegi) and b.tablo == a.tablo
         case SutunOzelligiDegistirmeIstegi():
             return isinstance(b, IndeksOlusturmaIstegi) and b.tablo == a.tablo
         case IndeksSilmeIstegi():
@@ -596,6 +717,11 @@ def _paket_onizlemesi(baglanti: Connection, paket: YapiPaketi) -> str:
     # alınır. Yeniden kurma uygulanmaz: yabancı anahtar denetimi açıkken
     # (bekleyenler) ve kapalıyken (onay) aynı metin çıkmalıdır.
     cumleler: list[str] = []
+    uyari: str | None = None
+    try:
+        paketi_dogrula_baglantida(baglanti, paket)
+    except GecersizPaket as hata:
+        uyari = str(hata)
     baglanti.exec_driver_sql("SAVEPOINT paket_onizleme")
     try:
         uygulanabilir = True
@@ -609,6 +735,8 @@ def _paket_onizlemesi(baglanti: Connection, paket: YapiPaketi) -> str:
     finally:
         baglanti.exec_driver_sql("ROLLBACK TO paket_onizleme")
         baglanti.exec_driver_sql("RELEASE paket_onizleme")
+    if uyari is not None:
+        cumleler.append(UYGULANAMAZ_ONEKI + uyari.replace("\n", " "))
     return ";\n".join(cumleler)
 
 

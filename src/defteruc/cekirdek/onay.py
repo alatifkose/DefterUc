@@ -93,6 +93,8 @@ def istek_birak(veritabani: Veritabani, istek: m.YapiIstegi) -> int:
     m.istek_sql(istek)
     with veritabani.islem() as oturum:
         baglanti = oturum.connection()
+        if isinstance(istek, m.YapiPaketi):
+            m.paketi_dogrula_baglantida(baglanti, istek)
         sql = m.istek_sql_baglantida(baglanti, istek)
         sonuc = baglanti.exec_driver_sql(
             f'INSERT INTO "{SISTEM_TABLOSU}" (tur, istek, sql, durum, olusturma) '
@@ -125,7 +127,11 @@ def bekleyenler(veritabani: Veritabani) -> tuple[YapiIstegiKaydi, ...]:
 
 def _guncel_onizleme(baglanti: Connection, kayit: YapiIstegiKaydi) -> str | None:
     # Saklı önizleme güncel şemayla aynıysa None; değilse yeni metni saklar ve döner.
-    if not m.yeniden_kurma_gerekir(kayit.istek):
+    # Paketin önizlemesi bağlantılı ön denetimi de taşır: şema değişip paket
+    # uygulanamaz olduysa listede işaretlenir (plan commit 4).
+    if not (
+        m.yeniden_kurma_gerekir(kayit.istek) or isinstance(kayit.istek, m.YapiPaketi)
+    ):
         return None
     guncel = m.istek_sql_baglantida(baglanti, kayit.istek)
     if guncel == kayit.sql:
