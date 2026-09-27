@@ -581,6 +581,29 @@ def test_guncelleme_kosulsuz_degersiz_ve_bozuk_girdi_dokunmadan_reddedilir(
     assert "kisiler" in {t.ad for t in yapi.yapiyi_oku(veritabani)}
 
 
+@pytest.mark.parametrize(
+    "kosul",
+    [
+        "1 UNION SELECT 999",
+        "1 GROUP BY (id % 2)",
+        "1 GROUP BY (id % 2) HAVING count(*) > 1",
+        "1 ORDER BY id",
+        "1 LIMIT 1",
+    ],
+)
+def test_guncelleme_kosulu_sorgu_yapisina_tasamaz_hicbir_satir_degismez(
+    veritabani: vt.Veritabani, kosul: str
+) -> None:
+    _kisiler_hazirla(veritabani)
+    with pytest.raises(kayit.KayitHatasi):
+        kayit.satirlari_guncelle(veritabani, "kisiler", kosul, [], {"puan": 9.0})
+    assert _puanlar(veritabani) == [(1, 0.0), (2, 0.0), (3, 0.0)]
+    sonuc = kayit.satirlari_guncelle(
+        veritabani, "kisiler", "id = 1 OR id = 3", [], {"puan": 1.0}
+    )
+    assert sonuc.guncellenen == 2
+
+
 def test_guncelleme_kosulu_sistem_tablosuna_ulasamaz_yapi_islemi_yapamaz(
     veritabani: vt.Veritabani,
 ) -> None:

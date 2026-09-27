@@ -45,7 +45,7 @@ def satirlari_oku(
         raise OkumaHatasi(f"sınır 1 ile {SINIR_AZAMI} arasında olmalı: {sinir}")
     if baslangic < 0:
         raise OkumaHatasi(f"başlangıç negatif olamaz: {baslangic}")
-    nerede = f" WHERE {parcayi_dogrula(kosul, 'koşul')}" if kosul.strip() else ""
+    nerede = f" WHERE ({parcayi_dogrula(kosul, 'koşul')})" if kosul.strip() else ""
     degerler = tuple(parametreler)
     try:
         with veritabani.islem() as oturum:

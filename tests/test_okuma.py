@@ -186,6 +186,62 @@ def test_alt_sorguyla_sistem_tablosu_ve_tehlikeli_islev_reddedilir(
         okuma.satirlari_oku(dolu, "kisiler", kosul)
 
 
+# --- inceleme 14061d3 B2: koşul tek ifade olmalı, sorgu yapısına taşamaz ------------
+
+TASAN_KOSULLAR = [
+    "1 UNION SELECT 999",
+    "1 UNION ALL SELECT 999",
+    "1 GROUP BY (id % 2)",
+    "1 GROUP BY (id % 2) HAVING count(*) > 1",
+    "1 ORDER BY id DESC",
+    "1 LIMIT 1",
+    "1 EXCEPT SELECT 1",
+]
+
+
+@pytest.mark.parametrize("kosul", TASAN_KOSULLAR)
+def test_sorgu_yapisina_tasan_kosul_reddedilir(dolu: vt.Veritabani, kosul: str) -> None:
+    with pytest.raises(okuma.OkumaHatasi):
+        okuma.satirlari_oku(dolu, "kisiler", kosul)
+    with pytest.raises(okuma.OkumaHatasi):
+        okuma.satirlari_oku(dolu, "kisiler", kosul, sinir=1)
+
+
+@pytest.mark.parametrize("kosul", TASAN_KOSULLAR)
+def test_tek_sutunlu_tabloda_tasan_kosul_hayalet_satir_uretmez(
+    veritabani: vt.Veritabani, kosul: str
+) -> None:
+    # Denetimcinin senaryosu: tek sütunlu tabloda "1 UNION SELECT 999" sütun
+    # sayısı tuttuğu için olmayan 999 satırını döndürüyordu.
+    _uygula(
+        veritabani,
+        motor.TabloOlusturmaIstegi(
+            "tek", (motor.Sutun("id", ("INTEGER", "PRIMARY KEY")),)
+        ),
+    )
+    kayit.satirlar_ekle(veritabani, "tek", [{"id": 1}, {"id": 2}, {"id": 3}])
+    with pytest.raises(okuma.OkumaHatasi):
+        okuma.satirlari_oku(veritabani, "tek", kosul)
+    assert okuma.satirlari_oku(veritabani, "tek").anahtarlar == ((1,), (2,), (3,))
+
+
+def test_parantez_icindeki_gecerli_kosullar_ve_toplam_dogru_kalir(
+    dolu: vt.Veritabani,
+) -> None:
+    hepsi = okuma.satirlari_oku(dolu, "kisiler", "1")
+    assert hepsi.eslesen_toplam == 250 and len(hepsi.satirlar) == 100
+    ikili = okuma.satirlari_oku(dolu, "kisiler", "id = 1 OR id = 2")
+    assert ikili.eslesen_toplam == 2 and ikili.anahtarlar == ((1,), (2,))
+    alt = okuma.satirlari_oku(
+        dolu, "kisiler", "id IN (SELECT id FROM kisiler WHERE id > 248) OR id = 1"
+    )
+    assert alt.anahtarlar == ((1,), (249,), (250,))
+    with pytest.raises(motor.GecersizParca):
+        okuma.satirlari_oku(
+            dolu, "kisiler", "1) UNION SELECT 999 FROM kisiler WHERE (1"
+        )
+
+
 def test_kosulda_siradan_islev_ve_alt_sorgu_serbest(dolu: vt.Veritabani) -> None:
     sonuc = okuma.satirlari_oku(
         dolu,

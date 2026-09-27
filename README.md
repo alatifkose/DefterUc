@@ -469,7 +469,17 @@ konuşulurken bu politika yeniden ele alınır.
 `satirlari_oku(veritabani, tablo, kosul, parametreler, sinir, baslangic)`:
 koşul bir SQL `WHERE` ifadesidir, motorun parça kuralından geçer (üst düzeyde
 `;` ve `,` yok, yorum yok, parantez dengeli), değerler `?` yer tutucularıyla
-parametre olarak verilir, metne gömülmez. Sıra birincil anahtara, yoksa
+parametre olarak verilir, metne gömülmez. **Koşul sorguya parantez içinde
+yerleştirilir**, `WHERE (koşul)` (dış inceleme 14061d3 B2): parça kuralı
+cümlenin kırılmasını engelliyordu ama koşulun tek bir ifade olmasını
+zorlamıyordu; tek sütunlu tabloda `1 UNION SELECT 999` koşulu tabloda
+olmayan 999 satırını döndürüyor, `1 GROUP BY (id % 2)` toplamı
+eksiltiyordu. Parantez içinde `UNION`, `GROUP BY`, `HAVING`, `ORDER BY`,
+`LIMIT`, `EXCEPT` SQLite'ta sözdizimi hatasıdır (betikle doğrulandı);
+alt sorgular `(SELECT ...)` biçiminde ifade oldukları için çalışmaya devam
+eder. Parça kuralı parantezden kaçmayı (`1) UNION ... WHERE (1`) zaten
+kesiyor. Güncelleme koşulu aynı biçimde sarılır. Testli: okuma
+(üç sütunlu ve tek sütunlu tablo), güncelleme (hiçbir satır değişmez), MCP. Sıra birincil anahtara, yoksa
 `rowid`'e göredir. Sınır varsayılan 100, en çok 1000. Sonuç sütun adları,
 satırlar, **koşula uyan toplam** (`eslesen_toplam`), dönen sayı (`donen`),
 başlangıç ve devamı olup olmadığı (`devami_var`); devamı `baslangic + donen`
@@ -577,8 +587,9 @@ Başlangıç: temiz `yeniden-insa`, yerel/uzak commit
 beklenen)` (2026-09-27, karar: Abdüllatif; ihtiyaç: fiş denemesinde açılan
 ödeme aracı bağlantısı var olan fişe yazılamıyordu). Veri işlemidir, yapı
 değişmez; kayıt gibi **onaysızdır**. Koşul zorunludur ve okuma ile aynı
-kuraldan geçer (parça kuralı, `?` parametreleri, metne gömme yok); boş
-koşul reddedilir, koşulsuz güncelleme yoktur. `degerler` boş olamaz, sütun
+kuraldan geçer (parça kuralı, `?` parametreleri, metne gömme yok, sorguya
+`WHERE (koşul)` diye parantez içinde girer); boş koşul reddedilir, koşulsuz
+güncelleme yoktur. `degerler` boş olamaz, sütun
 adları ad kuralından geçer; sistem tablosu adı daha bağlantı açılmadan
 reddedilir ("Sistem tablosu sınırı"). Tek transaction: önce yazma kilidi (`yazma_kilidi_al`),
 sonra satır kimliği (`satir_kimligi`, okuma ve ekleme ile aynı sözleşme),

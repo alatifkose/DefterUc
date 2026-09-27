@@ -476,6 +476,11 @@ def test_yapi_istegi_bekler_onay_sonrasi_kayit_yazilir_ve_yapi_okunur(
         "baslangic": 0,
         "devami_var": False,
     }
+    assert "okunamadı" in _hata(
+        sunucu,
+        mcp_kapisi.ARAC_SATIRLARI_OKU,
+        {"tablo": "kisiler", "kosul": "1 UNION SELECT 999"},
+    )
     assert "okunamadı: not authorized" in _hata(
         sunucu,
         mcp_kapisi.ARAC_SATIRLARI_OKU,
