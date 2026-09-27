@@ -38,7 +38,7 @@ def satirlari_oku(
     sinir: int = SINIR_VARSAYILAN,
     baslangic: int = 0,
 ) -> OkumaSonucu:
-    if tablo.startswith(yapi.SISTEM_ON_EKI):
+    if yapi.sistem_tablosu_mu(tablo):
         raise OkumaHatasi(f"{tablo}: sistem tablosu okunamaz")
     adi_dogrula(tablo, "tablo")
     if not 1 <= sinir <= SINIR_AZAMI:

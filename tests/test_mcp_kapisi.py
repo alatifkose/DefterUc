@@ -533,11 +533,17 @@ def test_diger_istek_turleri_ve_hatalar_arac_hatasi_olur(test_koku: Path) -> Non
     assert "talep kimliği 9 yok" in _hata(
         sunucu, mcp_kapisi.ARAC_ISTEK_DURUMU, {"talep_kimligi": 9}
     )
-    assert "sade olmalı" in _hata(
-        sunucu,
-        mcp_kapisi.ARAC_SATIR_EKLE,
-        {"tablo": onay.SISTEM_TABLOSU, "satirlar": [{"a": 1}]},
-    )
+    for sistem in (onay.SISTEM_TABLOSU, "sqlite_sequence"):
+        assert "sistem tablosuna yazılamaz" in _hata(
+            sunucu,
+            mcp_kapisi.ARAC_SATIR_EKLE,
+            {"tablo": sistem, "satirlar": [{"name": "t", "seq": 1000}]},
+        )
+        assert "sistem tablosuna yazılamaz" in _hata(
+            sunucu,
+            mcp_kapisi.ARAC_SATIRLARI_GUNCELLE,
+            {"tablo": sistem, "kosul": "1", "degerler": {"seq": 1000}},
+        )
     assert "eklenecek satır yok" in _hata(
         sunucu, mcp_kapisi.ARAC_SATIR_EKLE, {"tablo": "t", "satirlar": []}
     )

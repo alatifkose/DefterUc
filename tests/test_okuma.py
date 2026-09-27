@@ -161,9 +161,12 @@ def test_parca_kurali_kosula_uygulanir(dolu: vt.Veritabani, kosul: str) -> None:
         okuma.satirlari_oku(dolu, "kisiler", kosul)
 
 
-def test_sistem_tablosu_dogrudan_okunamaz(dolu: vt.Veritabani) -> None:
+@pytest.mark.parametrize(
+    "tablo", ["_defteruc_yapi_istekleri", "sqlite_sequence", "sqlite_master"]
+)
+def test_sistem_tablosu_dogrudan_okunamaz(dolu: vt.Veritabani, tablo: str) -> None:
     with pytest.raises(okuma.OkumaHatasi, match="sistem tablosu okunamaz"):
-        okuma.satirlari_oku(dolu, "_defteruc_yapi_istekleri")
+        okuma.satirlari_oku(dolu, tablo)
 
 
 @pytest.mark.parametrize(

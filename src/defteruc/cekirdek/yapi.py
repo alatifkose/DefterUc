@@ -9,8 +9,13 @@ from sqlalchemy import Connection
 from defteruc.cekirdek.veritabani import Veritabani
 
 SISTEM_ON_EKI = "_defteruc_"
+SQLITE_ON_EKI = "sqlite_"
 
 ROWID_TAKMA_ADLARI = ("rowid", "_rowid_", "oid")
+
+
+def sistem_tablosu_mu(tablo: str) -> bool:
+    return tablo.startswith(SISTEM_ON_EKI) or tablo.startswith(SQLITE_ON_EKI)
 
 
 class KimlikYok(Exception): ...
@@ -130,10 +135,11 @@ def okuma_yetkisi(eylem: int, birinci: str | None, ikinci: str | None) -> int:
     if eylem == sqlite3.SQLITE_SELECT:
         return sqlite3.SQLITE_OK
     if eylem == sqlite3.SQLITE_READ:
-        tablo = birinci or ""
-        if tablo.startswith(SISTEM_ON_EKI) or tablo.startswith("sqlite_"):
-            return sqlite3.SQLITE_DENY
-        return sqlite3.SQLITE_OK
+        return (
+            sqlite3.SQLITE_DENY
+            if sistem_tablosu_mu(birinci or "")
+            else sqlite3.SQLITE_OK
+        )
     if eylem == sqlite3.SQLITE_FUNCTION:
         return sqlite3.SQLITE_DENY if ikinci in YASAK_ISLEVLER else sqlite3.SQLITE_OK
     return sqlite3.SQLITE_DENY
@@ -173,7 +179,7 @@ def yapiyi_oku(veritabani: Veritabani) -> tuple[TabloBilgisi, ...]:
             "SELECT name, sql FROM sqlite_master WHERE type = 'table' "
             "AND name NOT LIKE ? ESCAPE '\\' AND name NOT LIKE ? ESCAPE '\\' "
             "ORDER BY name",
-            (_like_on_eki("sqlite_"), _like_on_eki(SISTEM_ON_EKI)),
+            (_like_on_eki(SQLITE_ON_EKI), _like_on_eki(SISTEM_ON_EKI)),
         ).all()
         return tuple(_tablo(baglanti, str(t[0]), str(t[1])) for t in tablolar)
 

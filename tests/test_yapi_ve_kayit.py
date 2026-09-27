@@ -190,7 +190,7 @@ def test_bos_liste_ve_bos_satir_reddedilir(veritabani: vt.Veritabani) -> None:
     assert _satirlar(veritabani, "SELECT count(*) FROM kisiler") == [(0,)]
 
 
-@pytest.mark.parametrize("ad", [onay.SISTEM_TABLOSU, "Kisiler", "a b", 'a"b', ""])
+@pytest.mark.parametrize("ad", ["Kisiler", "a b", 'a"b', ""])
 def test_sade_olmayan_tablo_adi_dokunmadan_reddedilir(
     veritabani: vt.Veritabani, ad: str
 ) -> None:
@@ -572,7 +572,7 @@ def test_guncelleme_kosulsuz_degersiz_ve_bozuk_girdi_dokunmadan_reddedilir(
         )
     with pytest.raises(motor.GecersizAd):
         kayit.satirlari_guncelle(veritabani, "kisiler", "id = 1", [], {"Puan": 1.0})
-    with pytest.raises(motor.GecersizAd):
+    with pytest.raises(kayit.KayitHatasi, match="sistem tablosuna yazılamaz"):
         kayit.satirlari_guncelle(
             veritabani, onay.SISTEM_TABLOSU, "kimlik = 1", [], {"durum": "UYGULANDI"}
         )
@@ -699,3 +699,67 @@ def test_guncelleme_replace_politikasinda_baska_satiri_silmez(
         veritabani, "y", "id = ?", [1], {"v": "c"}, beklenen=1
     )
     assert sonuc.guncellenen == 1 and sonuc.anahtarlar == ((1,),)
+
+
+# --- inceleme fe1059a B3: sistem tabloları veri araçlarına yazma hedefi olamaz -------
+
+
+@pytest.mark.parametrize(
+    "ad", ["sqlite_sequence", "sqlite_master", onay.SISTEM_TABLOSU]
+)
+def test_sistem_tablosuna_satir_eklenemez_ve_guncellenemez(
+    veritabani: vt.Veritabani, ad: str
+) -> None:
+    with pytest.raises(kayit.KayitHatasi, match="sistem tablosuna yazılamaz"):
+        kayit.satirlar_ekle(veritabani, ad, [{"name": "gelecek", "seq": 1000}])
+    with pytest.raises(kayit.KayitHatasi, match="sistem tablosuna yazılamaz"):
+        kayit.satirlari_guncelle(veritabani, ad, "1", [], {"seq": 1000})
+    assert _satirlar(veritabani, "SELECT count(*) FROM sqlite_sequence") == [(0,)]
+    assert onay.istek_birak(veritabani, KISILER) == 1
+
+
+def test_sqlite_ile_baslayan_kullanici_tablosuna_yazilir(
+    veritabani: vt.Veritabani,
+) -> None:
+    _uygula(
+        veritabani, motor.TabloOlusturmaIstegi("sqliteverileri", (motor.Sutun("ad"),))
+    )
+    assert kayit.satirlar_ekle(veritabani, "sqliteverileri", [{"ad": "a"}]).eklenen == 1
+    sonuc = kayit.satirlari_guncelle(veritabani, "sqliteverileri", "1", [], {"ad": "b"})
+    assert sonuc.guncellenen == 1
+    assert okuma.satirlari_oku(veritabani, "sqliteverileri").satirlar == (("b",),)
+
+
+def test_silme_zincirli_replace_tablosuna_cakismayan_ekleme_calisir(
+    veritabani: vt.Veritabani,
+) -> None:
+    # Denetimcinin uyarısı: ekleme yoluna "yalnız hedef tabloya INSERT" kancası
+    # konsaydı SQLite ON DELETE CASCADE için alt tabloda DELETE izni ister ve
+    # çakışmayan ekleme bile "not authorized" düşerdi. Ekleme yolunda kanca yok.
+    _uygula(
+        veritabani,
+        motor.TabloOlusturmaIstegi(
+            "ana",
+            (
+                motor.Sutun("id", ("INTEGER", "PRIMARY KEY")),
+                motor.Sutun("kod", ("TEXT", "UNIQUE ON CONFLICT REPLACE")),
+            ),
+        ),
+    )
+    _uygula(
+        veritabani,
+        motor.TabloOlusturmaIstegi(
+            "alt",
+            (
+                motor.Sutun("id", ("INTEGER", "PRIMARY KEY")),
+                motor.Sutun(
+                    "ana_id", ("INTEGER", "REFERENCES ana(id) ON DELETE CASCADE")
+                ),
+            ),
+        ),
+    )
+    kayit.satirlar_ekle(veritabani, "ana", [{"id": 1, "kod": "a"}])
+    kayit.satirlar_ekle(veritabani, "alt", [{"ana_id": 1}])
+    sonuc = kayit.satirlar_ekle(veritabani, "ana", [{"kod": "b"}])
+    assert sonuc.eklenen == 1 and sonuc.anahtarlar == ((2,),)
+    assert _satirlar(veritabani, "SELECT ana_id FROM alt") == [(1,)]

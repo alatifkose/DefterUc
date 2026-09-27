@@ -464,7 +464,8 @@ parametre olarak verilir, metne gömülmez. Sıra birincil anahtara, yoksa
 `rowid`'e göredir. Sınır varsayılan 100, en çok 1000. Sonuç sütun adları,
 satırlar, **koşula uyan toplam** (`eslesen_toplam`), dönen sayı (`donen`),
 başlangıç ve devamı olup olmadığı (`devami_var`); devamı `baslangic + donen`
-ile alınır. Sistem tablosu adıyla çağrı daha bağlantı açılmadan reddedilir.
+ile alınır. Sistem tablosu adıyla çağrı daha bağlantı açılmadan reddedilir
+(`yapi.sistem_tablosu_mu`, aşağıda "Sistem tablosu sınırı").
 **Tek yanıt, tek eşleşme kümesi** (2026-09-26). Koşulu taşıyan tek bir
 sıralı sorgu çalışır; toplam, bu sorgunun bütün sonuçları sayılarak bulunur.
 `baslangic` ve `sinir` aralığındaki sonuçlar sayfaya alınır; uygulama
@@ -569,8 +570,8 @@ beklenen)` (2026-09-27, karar: Abdüllatif; ihtiyaç: fiş denemesinde açılan
 değişmez; kayıt gibi **onaysızdır**. Koşul zorunludur ve okuma ile aynı
 kuraldan geçer (parça kuralı, `?` parametreleri, metne gömme yok); boş
 koşul reddedilir, koşulsuz güncelleme yoktur. `degerler` boş olamaz, sütun
-adları ad kuralından geçer; sistem tablosu adı daha bağlantı açılmadan ad
-kuralına takılır. Tek transaction: önce yazma kilidi (`yazma_kilidi_al`),
+adları ad kuralından geçer; sistem tablosu adı daha bağlantı açılmadan
+reddedilir ("Sistem tablosu sınırı"). Tek transaction: önce yazma kilidi (`yazma_kilidi_al`),
 sonra satır kimliği (`satir_kimligi`, okuma ve ekleme ile aynı sözleşme),
 sonra `UPDATE OR ABORT ... RETURNING <kimlik>`; kısıt ihlali (UNIQUE, yabancı
 anahtar, CHECK) hepsini geri alır. **Tablonun kendi çakışma politikası
@@ -595,6 +596,24 @@ ve DELETE "not authorized"), sonra testle kanıtlandı
 (`tests/test_yapi_ve_kayit.py`, `tests/test_mcp_kapisi.py`). Dönen anahtar
 sırası SQLite'ın verdiği sıradır. Satır silme aracı yoktur (ihtiyaç
 çıkmadı, ayrıca konuşulur).
+
+### Sistem tablosu sınırı
+
+Veri araçlarının (okuma, ekleme, güncelleme) hedef tablosu tek yardımcıyla
+denetlenir: `yapi.sistem_tablosu_mu(tablo)`, `_defteruc_` ve `sqlite_`
+önekli adlar için doğrudur; okuma `OkumaHatasi("sistem tablosu okunamaz")`,
+ekleme ve güncelleme `KayitHatasi("sistem tablosuna yazılamaz")` verir, ad
+kuralından da önce. Aynı yardımcı yetkilendirme kancasında (`okuma_yetkisi`,
+`SQLITE_READ`) alt sorguları da keser. Öneke bakıldığı için `sqliteverileri`
+gibi kullanıcı tabloları serbesttir (testli). Gerekçe (dış inceleme fe1059a
+B3): ekleme yolunda yalnız ad kuralı vardı; `_defteruc_` alt çizgiyle
+başladığı için takılıyor, `sqlite_sequence` geçiyordu. Sistem tablosu
+`AUTOINCREMENT` kullandığı için `sqlite_sequence` gerçek veritabanında
+vardır; oraya yazılan bir sayaç satırı onay taleplerinin açılmasını
+bozabiliyordu (denetimci 64 bit sayaçla gösterdi). Ekleme yoluna
+yetkilendirme kancası **konmadı**: SQLite izni cümle hazırlanırken sorar, `ON
+DELETE CASCADE`'li alt tablo varken çakışmayan ekleme bile "not authorized"
+düşerdi (betikle doğrulandı, denetimcinin uyarısı; testli koruma).
 
 ## Veritabanı
 
@@ -971,7 +990,7 @@ sonra engellenir. Araç
 girdileri pydantic ile şemalanır (`SutunGirdisi`: `ad`, `ozellikler`); satır
 değerleri metin, tam sayı, ondalık, doğru/yanlış ya da `null` olur ve SQL'e
 parametre olarak geçer, metne eklenmez. Tablo ve sütun adları motorun ad
-kuralından geçer; sistem tablosuna satır yazılamaz. Veritabanı nesnesi
+kuralından geçer; sistem tablosuna (`_defteruc_*`, `sqlite_*`) satır yazılamaz. Veritabanı nesnesi
 sunucu kurulurken açılır ama dosya ilk araç çağrısında oluşur; sistem tablosu
 istek araçlarında "yoksa oluştur" ile hazırlanır. Günlük: her yapı isteği
 `mcp_yapi_istegi` (talep, tür), her kayıt `mcp_kayit` (tablo, satır sayısı);

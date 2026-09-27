@@ -26,7 +26,7 @@ class EklemeSonucu:
 def satirlar_ekle(
     veritabani: Veritabani, tablo: str, satirlar: Sequence[Mapping[str, Deger]]
 ) -> EklemeSonucu:
-    adi_dogrula(tablo, "tablo")
+    _yazma_hedefini_dogrula(tablo)
     if not satirlar:
         raise KayitHatasi("eklenecek satır yok")
     cumleler = tuple(_ekleme_sql(tablo, satir) for satir in satirlar)
@@ -67,7 +67,7 @@ def satirlari_guncelle(
     degerler: Mapping[str, Deger],
     beklenen: int | None = None,
 ) -> GuncellemeSonucu:
-    adi_dogrula(tablo, "tablo")
+    _yazma_hedefini_dogrula(tablo)
     if not kosul.strip():
         raise KayitHatasi(f"{tablo}: koşulsuz güncelleme yapılmaz; koşul boş olamaz")
     if not degerler:
@@ -105,6 +105,12 @@ def satirlari_guncelle(
             f"{tablo}: satırlar güncellenemedi, hiçbiri değiştirilmedi: {neden}"
         ) from hata
     return GuncellemeSonucu(len(anahtarlar), kimlik.sutunlar, anahtarlar)
+
+
+def _yazma_hedefini_dogrula(tablo: str) -> None:
+    if yapi.sistem_tablosu_mu(tablo):
+        raise KayitHatasi(f"{tablo}: sistem tablosuna yazılamaz")
+    adi_dogrula(tablo, "tablo")
 
 
 def _guncelleme_yetkisi(tablo: str) -> yapi.Yetki:
